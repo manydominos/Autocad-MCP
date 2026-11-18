@@ -7407,7 +7407,7 @@ async def drawing_history(
 
 
 # ---------------------------------------------------------------------------
-# ── SECTION 11: System (8 tools) ────────────────────────────────────────────
+# ── SECTION 11: System (10 tools) ────────────────────────────────────────────
 # ---------------------------------------------------------------------------
 
 
@@ -7498,7 +7498,16 @@ async def system_status(
             out["metrics"] = _metrics_payload(ctx, None)
         out["policy"] = policy.describe()
         return out
-    status = await b.system_status()
+    try:
+        status = await b.system_status()
+    except RuntimeError as exc:
+        # v4: a blocked AutoCAD is a status, not an error - and the dialog that
+        # blocks it is what the caller needs to see.
+        if getattr(b, "name", "") != "com" or not str(exc).startswith("AutoCAD did not respond"):
+            raise
+        status = {"backend": "com", "connected": False, "error": str(exc)}
+    if getattr(b, "name", "") == "com" and not status.get("connected", True):
+        status["dialogs"] = await _cad_dialogs_brief()
     status["server"] = "AutoCAD MCP Pro"
     if tool_count is not None:
         status["tool_count"] = tool_count
@@ -7526,6 +7535,95 @@ async def system_status(
 async def system_capabilities(ctx: Context = None) -> dict:
     """Return machine-readable support modes for the active backend."""
     return _backend(ctx).capabilities().to_dict()
+
+
+async def _cad_dialogs_brief() -> list[dict]:
+    """AutoCAD's dialogs for ``system_status`` (Win32, never COM); [] on failure."""
+    import asyncio
+
+    from backends import win_dialogs
+
+    if not win_dialogs.available():
+        return []
+    try:
+        listed = await asyncio.wait_for(asyncio.to_thread(win_dialogs.list_dialogs), timeout=20)
+    except Exception as exc:
+        log.debug("dialog listing for system_status failed: %s", exc)
+        return []
+    return [
+        {"hwnd": d["hwnd"], "title": d["title"], "modal": d["modal"], "texts": d["texts"][:5]}
+        for d in listed["dialogs"]
+    ]
+
+
+@cad_tool(
+    summary="List AutoCAD's open dialog windows (title, text, buttons); a modal one blocks every COM call.",
+    cost="read",
+)
+@mcp.tool(
+    annotations={"title": "List AutoCAD Dialogs", "readOnlyHint": True},
+    tags={"system"},
+)
+async def system_dialog_list(
+    read_text: Annotated[
+        bool, "Also read TaskDialog text through UI Automation (slower; Win32 cannot read it)"
+    ] = True,
+    ctx: Context = None,
+) -> dict:
+    """List the dialog windows of the CAD process through Win32 - works while COM is blocked.
+
+    Each row: `hwnd`, `title`, `class`, `modal` (its owner window is disabled,
+    so AutoCAD rejects COM calls until it closes), `task_dialog`, `texts`,
+    `buttons` and `text_source` (`win32` or `uia`). `blocked` is true when
+    AutoCAD's main window is disabled. The process is `CAD_PROCESS_NAMES`
+    (default `acad.exe`). Read-only: nothing is clicked. Close a dialog with
+    `system_dialog_close` (cancel/esc/close only).
+    """
+    import asyncio
+
+    from backends import win_dialogs
+
+    result = await asyncio.wait_for(
+        asyncio.to_thread(win_dialogs.list_dialogs, use_uia=read_text), timeout=30
+    )
+    result["modal_count"] = sum(1 for d in result["dialogs"] if d["modal"])
+    return result
+
+
+@cad_tool(
+    summary="Dismiss an AutoCAD dialog with Cancel, Esc or Close only - never Yes, Recover or another button.",
+    cost="safe",
+)
+@mcp.tool(
+    annotations={"title": "Close AutoCAD Dialog", "readOnlyHint": False, "destructiveHint": False},
+    tags={"system"},
+)
+async def system_dialog_close(
+    hwnd: Annotated[int, "Window handle from system_dialog_list"],
+    action: Annotated[
+        str, "cancel (default: the dialog's Cancel), esc (Esc key) or close (WM_CLOSE) - nothing else"
+    ] = "cancel",
+    ctx: Context = None,
+) -> dict:
+    """Dismiss one dialog listed by `system_dialog_list` with Cancel, Esc or Close.
+
+    Refused before anything is sent: an `action` other than cancel/esc/close
+    (a named button such as Yes or Recover may change the drawing - that is the
+    operator's decision) and an `hwnd` that is not a dialog of the CAD process
+    right now. Returns `closed`, the dialogs still open and `blocked`.
+    """
+    import asyncio
+
+    from backends import win_dialogs
+
+    if not win_dialogs.available():
+        raise ToolError("system_dialog_close works only on Windows with pywin32 (win32_only)")
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(win_dialogs.close_dialog, hwnd, action), timeout=30
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @cad_tool(summary="Read one AutoCAD system variable, such as DIMSCALE or LTSCALE.", cost="read")
@@ -15219,6 +15317,12 @@ def _validate_http_bind(host: str) -> None:
         # Local v3 addition: explicit opt-out of the token for a closed network.
         # ``is True`` so that only the real boolean setting counts.
         if getattr(config.settings, "allow_no_auth", False) is True:
+            # Without a token ALLOWED_PATHS matters even more (the 1.8-17 rule).
+            if not config.settings.allowed_paths:
+                raise SystemExit(
+                    f"Refusing to bind HTTP on '{host}' without ALLOWED_PATHS. A non-loopback "
+                    "server must confine its file reads and writes: set ALLOWED_PATHS=<folder>[,...]."
+                )
             log.warning(
                 "!!! ALLOW_NO_AUTH=true: binding HTTP on non-loopback host '%s' "
                 "WITHOUT authentication (MCP_AUTH_TOKEN is not set). Any client "

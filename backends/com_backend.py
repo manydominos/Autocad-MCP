@@ -38,7 +38,7 @@ from engineering.errors import (
 from engineering.measure import is_self_intersecting, polygon_area_perimeter
 from security import sanitize_macro_argument, sanitize_symbol_name, validate_path
 
-from . import lineage, message_filter, ocs
+from . import lineage, message_filter, ocs, win_dialogs
 from .atomic_write import atomic_write_dxf, file_sha256, resolve_pending
 from .base import (
     AutoCADBackend,
@@ -3983,6 +3983,30 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         _ = app.Version  # raises if disconnected
 
     async def _run(self, func, *args, **kwargs):
+        """Run a callable in the COM executor thread, with ``COM_CALL_TIMEOUT``.
+
+        :meth:`_run_timed` with the per-call setting; every tool but
+        ``drawing_open`` goes through here.
+        """
+        return await self._run_timed(
+            config.settings.com_call_timeout, "COM_CALL_TIMEOUT", func, *args, **kwargs
+        )
+
+    async def _modal_dialogs(self) -> list[dict]:
+        """AutoCAD's modal dialogs through Win32 - never through the COM thread.
+
+        ``[]`` when Win32 is unavailable or the check itself fails: the check
+        only adds information, it must never be the reason a call fails.
+        """
+        if not win_dialogs.available():
+            return []
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(win_dialogs.modal_dialogs), timeout=20)
+        except Exception as exc:
+            log.debug("modal dialog check failed: %s", exc)
+            return []
+
+    async def _run_timed(self, timeout, timeout_setting, func, *args, **kwargs):
         """Run a callable in the COM executor thread, with a hard timeout.
 
         Without the timeout, an unresponsive AutoCAD (modal dialog, long Regen,
@@ -4015,7 +4039,6 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         if self._executor is None:
             raise RuntimeError("ComBackend not connected. Call connect() first.")
         loop = asyncio.get_running_loop()
-        timeout = config.settings.com_call_timeout
         started = time.time()
         document = self._document_label()
         guard = _JobGuard(self)
@@ -4118,7 +4141,7 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                 "AutoCAD after this error - the worker is blocked inside an "
                 "uncancellable COM call, not stopped - so verify the drawing before "
                 "retrying: a retry can double-apply the operation. Increase "
-                "COM_CALL_TIMEOUT if a long operation is expected."
+                f"{timeout_setting} if a long operation is expected."
             ) from e
         except _COM_ERROR as e:
             hr = e.args[0] if e.args else 0
@@ -4332,7 +4355,21 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         The repair is ezdxf's recover reader, written into a private temp DXF
         that AutoCAD then opens: the document's FullName is that copy, and a
         save onto the damaged source needs ``overwrite_source=True``.
+
+        Guarded against AutoCAD's modal dialogs: a dialog already open is
+        reported by title and text and ``Open`` is not attempted (it would only
+        queue behind it); ``Open`` has its own ``OPEN_CALL_TIMEOUT`` (default
+        120 s - a DXF on a network share can take longer than a short
+        ``COM_CALL_TIMEOUT``); on a timeout the error names the dialog(s)
+        AutoCAD shows now (read them with ``system_dialog_list``).
         """
+        blocking = await self._modal_dialogs()
+        if blocking:
+            raise RuntimeError(
+                "AutoCAD is showing a modal dialog, so drawing_open was not attempted: "
+                f"{win_dialogs.summarize(blocking)}. Read it with system_dialog_list and "
+                "close it with system_dialog_close (cancel/esc/close) or in AutoCAD, then retry."
+            )
         recovered = None
         open_path = path
         save_recovery: list[dict] = []
@@ -4352,7 +4389,20 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
             name, full_name = self._wait_out_rejected_call(lambda: (doc.Name, doc.FullName))
             return {"ok": True, "name": name, "path": full_name}, _dbmod_of(doc)
 
-        result, dbmod = await self._run(_sync)
+        try:
+            result, dbmod = await self._run_timed(
+                config.settings.open_call_timeout, "OPEN_CALL_TIMEOUT", _sync
+            )
+        except RuntimeError as exc:
+            if not str(exc).startswith("AutoCAD did not respond"):
+                raise
+            dialogs = await self._modal_dialogs()
+            if not dialogs:
+                raise
+            raise RuntimeError(
+                f"{exc} AutoCAD now shows: {win_dialogs.summarize(dialogs)}. Read it with "
+                "system_dialog_list; close it with system_dialog_close (cancel/esc/close)."
+            ) from exc
         await self._rebind()
         entry = self._bound_entry()
         if recover:

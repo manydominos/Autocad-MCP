@@ -225,6 +225,12 @@ class Settings:
             )
             self.com_refresh_mode = "auto"
 
+        # Timeout for ``drawing_open`` on the live backend alone (v4, agent mcp).
+        # ``Documents.Open`` of a DXF from a network share can legitimately take
+        # longer than a per-call COM_CALL_TIMEOUT tuned for short calls (15 s on
+        # the AutoCAD VM); a dialog AutoCAD shows meanwhile is reported by name.
+        self.open_call_timeout: float = float(os.environ.get("OPEN_CALL_TIMEOUT", "120"))
+
         # Per-call timeout for the headless ezdxf backend. Every ezdxf method
         # runs under one document lock, so a single hung call (pathological DXF,
         # a render that never returns) would otherwise hold that lock forever

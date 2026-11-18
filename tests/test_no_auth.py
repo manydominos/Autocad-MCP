@@ -16,7 +16,7 @@ import pytest
 REMOTE = "172.30.50.14"
 
 
-def _server(monkeypatch, *, allow_remote, token, allow_no_auth):
+def _server(monkeypatch, *, allow_remote, token, allow_no_auth, allowed_paths=("C:/x",)):
     sys.modules.pop("server", None)
     import config as cfg
     import server as srv
@@ -24,6 +24,7 @@ def _server(monkeypatch, *, allow_remote, token, allow_no_auth):
     monkeypatch.setattr(cfg.settings, "allow_remote_http", allow_remote, raising=False)
     monkeypatch.setattr(cfg.settings, "mcp_auth_token", token, raising=False)
     monkeypatch.setattr(cfg.settings, "allow_no_auth", allow_no_auth, raising=False)
+    monkeypatch.setattr(cfg.settings, "allowed_paths", list(allowed_paths), raising=False)
     return srv
 
 
@@ -126,3 +127,10 @@ async def test_run_async_with_setting_starts(monkeypatch):
     _probe(srv, monkeypatch)
     with pytest.raises(AssertionError, match="the server started"):
         await srv.mcp.run_async(transport="http", host=REMOTE)
+
+
+def test_with_setting_allowed_paths_is_still_required(monkeypatch):
+    """1.8-17: a network bind without a token must still confine its files."""
+    srv = _server(monkeypatch, allow_remote=True, token="", allow_no_auth=True, allowed_paths=())
+    with pytest.raises(SystemExit, match="without ALLOWED_PATHS"):
+        srv._validate_http_bind(REMOTE)

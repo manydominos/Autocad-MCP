@@ -660,11 +660,11 @@ async def test_tool_group_sizes_are_unchanged():
         "sheet": 11,
         "solids": 5,
         "styles": 10,
-        "system": 7,
+        "system": 9,  # +system_dialog_list, system_dialog_close (agent mcp v4)
         "templates": 2,
         "transactions": 7,
         "understanding": 5,
         "validation": 1,
         "view": 4,
     }
-    assert sum(sizes.values()) == 257
+    assert sum(sizes.values()) == 259

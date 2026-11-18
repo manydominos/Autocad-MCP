@@ -1608,6 +1608,22 @@ TOOL_ALIASES: dict[str, ToolAliases] = {
             "can it do this",
         ),
     ),
+    "system_dialog_close": ToolAliases(
+        synonyms=(
+            "close a dialog",
+            "dismiss a popup",
+            "press escape in autocad",
+            "autocad is stuck",
+        ),
+    ),
+    "system_dialog_list": ToolAliases(
+        synonyms=(
+            "which dialog is open",
+            "modal dialog",
+            "autocad not responding",
+            "read a popup message",
+        ),
+    ),
     "system_get_variable": ToolAliases(
         acad=("SETVAR",),
         synonyms=(

@@ -3,7 +3,7 @@
   "schema_version": 2,
   "package_version": "1.8.0",
   "totals": {
-    "tools": 257,
+    "tools": 259,
     "resources": 13,
     "prompts": 5,
     "groups": 28
@@ -31,7 +31,7 @@
     "sheet": 11,
     "solids": 5,
     "styles": 10,
-    "system": 7,
+    "system": 9,
     "templates": 2,
     "transactions": 7,
     "understanding": 5,
@@ -5375,6 +5375,47 @@
       ],
       "annotations": {
         "title": "Backend Capabilities",
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "system_dialog_close",
+      "group": "system",
+      "cost": "safe",
+      "summary": "Dismiss an AutoCAD dialog with Cancel, Esc or Close only - never Yes, Recover or another button.",
+      "acad": [],
+      "synonyms": [
+        "close a dialog",
+        "dismiss a popup",
+        "press escape in autocad",
+        "autocad is stuck"
+      ],
+      "tags": [
+        "system"
+      ],
+      "annotations": {
+        "title": "Close AutoCAD Dialog",
+        "readOnlyHint": false,
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "system_dialog_list",
+      "group": "system",
+      "cost": "read",
+      "summary": "List AutoCAD's open dialog windows (title, text, buttons); a modal one blocks every COM call.",
+      "acad": [],
+      "synonyms": [
+        "which dialog is open",
+        "modal dialog",
+        "autocad not responding",
+        "read a popup message"
+      ],
+      "tags": [
+        "system"
+      ],
+      "annotations": {
+        "title": "List AutoCAD Dialogs",
         "readOnlyHint": true
       }
     },

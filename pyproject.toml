@@ -83,6 +83,8 @@ com = [
     'pywin32>=306; sys_platform == "win32"',
     # Win32 window capture for the live-AutoCAD screenshot path.
     "Pillow>=10.0",
+    # UI Automation text of a modal TaskDialog (system_dialog_list, backends/win_dialogs.py).
+    'comtypes>=1.4; sys_platform == "win32"',
 ]
 pdf = [
     # Also satisfies ezdxf's hard Pillow requirement, transitively.
@@ -99,6 +101,7 @@ full = [
     # extra this project recommends to contributors, and it was
     # uninstallable on every non-Windows machine.
     'pywin32>=306; sys_platform == "win32"',
+    'comtypes>=1.4; sys_platform == "win32"',
     "Pillow>=10.0",
     "matplotlib>=3.8",
     "openpyxl>=3.1",

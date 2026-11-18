@@ -19,11 +19,11 @@ Live through COM on Windows, or headless through ezdxf anywhere — one typed co
 
 </div>
 
-> **v1.8 release snapshot:** 257 tools · 13 resources · 5 prompt templates · 7583 collected tests.
-> 257 is the **registered** count. Since 1.8.0 a default install lists six over `tools/list`
+> **v1.8 release snapshot:** 259 tools · 13 resources · 5 prompt templates · 7650 collected tests.
+> 259 is the **registered** count. Since 1.8.0 a default install lists six over `tools/list`
 > (`DISCOVERY_MODE=search`: `search_tools`, `describe_tool`, `call_tool` and the three
 > `DISCOVERY_PINNED` tools), and every tool the profile and packs allow stays callable by name;
-> `DISCOVERY_MODE=off` lists 253: the 252 a default profile enables (`ENABLE_3D` unset hides the five
+> `DISCOVERY_MODE=off` lists 255: the 254 a default profile enables (`ENABLE_3D` unset hides the five
 > solids) plus `describe_tool`. `system_about` is the runtime authority.
 
 ## What's new in 1.8
@@ -155,7 +155,7 @@ claude plugin marketplace add U-C4N/Autocad-MCP
 claude plugin install autocad-mcp-pro@autocad-mcp
 ```
 
-The plugin runs `uvx --from "autocad-mcp-pro[com,pdf,office]==1.8.0" autocad-mcp`, which is this release at exactly the plugin's version, so it needs [uv](https://docs.astral.sh/uv/). Set `AUTOCAD_MCP_SOURCE` to a checkout (`C:/path/to/Autocad-MCP[com,pdf,office]`) to run that code instead. The plugin starts the server in search mode (`DISCOVERY_MODE=${AUTOCAD_MCP_DISCOVERY:-search}`); set `AUTOCAD_MCP_DISCOVERY=off` for the full catalog. Already running the server yourself? Keep one: turn the plugin's server off in `/mcp`, or copy `.claude/skills/autocad-mcp-premium/` into your `.claude/skills/` instead. [`plugin/README.md`](https://github.com/U-C4N/Autocad-MCP/blob/main/plugin/README.md) has the details.
+The plugin runs `uvx --refresh-package autocad-mcp-pro --from "autocad-mcp-pro[com,pdf,office] @ https://github.com/manydominos/Autocad-MCP/archive/refs/heads/main.zip" autocad-mcp`: this fork's newest `main`, fetched again at every start (no git needed), so it needs [uv](https://docs.astral.sh/uv/). Set `AUTOCAD_MCP_SOURCE` to a checkout (`C:/path/to/Autocad-MCP[com,pdf,office]`) to run that code instead. The plugin starts the server in search mode (`DISCOVERY_MODE=${AUTOCAD_MCP_DISCOVERY:-search}`); set `AUTOCAD_MCP_DISCOVERY=off` for the full catalog. Already running the server yourself? Keep one: turn the plugin's server off in `/mcp`, or copy `.claude/skills/autocad-mcp-premium/` into your `.claude/skills/` instead. [`plugin/README.md`](https://github.com/U-C4N/Autocad-MCP/blob/main/plugin/README.md) has the details.
 
 <details>
 <summary><b>Wire it to an MCP client</b></summary>

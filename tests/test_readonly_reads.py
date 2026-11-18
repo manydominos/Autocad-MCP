@@ -30,6 +30,7 @@ pytestmark = pytest.mark.asyncio
 #: headless engine refuses by capability. Each is a reason, not a convenience.
 NO_DOCUMENT_READ = {
     "system_status": "process state, answered without the lock on purpose",
+    "system_dialog_list": "Win32 windows of the CAD process, never the engine (works while COM is blocked)",
     "drawing_history": "the durable journal (detail='row'); only detail='changes' reads a drawing",
     "system_capabilities": "the engine's capability map",
     "system_about": "the server's own surface",

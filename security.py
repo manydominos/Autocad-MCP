@@ -82,6 +82,42 @@ _BLOCKED_PATH_PATTERNS = re.compile(
 _DRIVE_ANCHOR = re.compile(r"^[A-Za-z]:$")
 
 
+# A mapped network drive (Z: on a VMware shared folder) resolves to UNC
+# (\\vmware-host\Shared Folders\...). Such a path is accepted only when it lies
+# inside a UNC root that ALLOWED_PATHS names explicitly - a UNC entry, or a drive
+# entry that itself resolves to UNC. Extended-length (\\?\), device (\\.\),
+# admin shares (share ending in '$') and the local machine stay refused, even if
+# configured. No ALLOWED_PATHS means no UNC at all (unchanged behaviour).
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0", "."})
+
+
+def _is_plain_unc_drive(drive: str) -> bool:
+    return drive.startswith("\\\\") and not drive.startswith(("\\\\?\\", "\\\\.\\"))
+
+
+def _unc_inside_allowed_root(resolved: Path) -> bool:
+    """True if ``resolved`` is a UNC path inside an explicit UNC root of ALLOWED_PATHS."""
+    drive = resolved.drive
+    if not _is_plain_unc_drive(drive):
+        return False
+    host, _, share = drive[2:].partition("\\")
+    host = host.lower()
+    computer = os.environ.get("COMPUTERNAME", "").lower()
+    if not host or not share or share.endswith("$"):
+        return False
+    if host in _LOCAL_HOSTS or host.startswith("127.") or (computer and host == computer):
+        return False
+    for root in config.settings.allowed_paths:
+        if not _is_plain_unc_drive(root.drive):
+            continue
+        try:
+            if resolved.is_relative_to(root):
+                return True
+        except (ValueError, TypeError):
+            pass
+    return False
+
+
 def _reject_non_local_anchor(original: str, resolved: Path) -> None:
     r"""Every guard below compares against plain ``X:\`` paths.
 
@@ -99,7 +135,7 @@ def _reject_non_local_anchor(original: str, resolved: Path) -> None:
     suggest another engine would accept it.
     """
     drive = resolved.drive
-    if _DRIVE_ANCHOR.match(drive):
+    if _DRIVE_ANCHOR.match(drive) or _unc_inside_allowed_root(resolved):
         return
     log.warning("Blocked non-local path anchor: %s -> %s", original, resolved)
     raise PathRefusedError(

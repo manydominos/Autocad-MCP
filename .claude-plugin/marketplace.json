@@ -1,8 +1,8 @@
 {
   "name": "autocad-mcp",
   "owner": {
-    "name": "U-C4N",
-    "url": "https://github.com/U-C4N"
+    "name": "manydominos",
+    "url": "https://github.com/manydominos"
   },
   "metadata": {
     "description": "AutoCAD MCP Pro for Claude Code: the server and its premium drafting skill."
@@ -17,8 +17,8 @@
         "name": "U-C4N",
         "url": "https://github.com/U-C4N"
       },
-      "homepage": "https://github.com/U-C4N/Autocad-MCP",
-      "repository": "https://github.com/U-C4N/Autocad-MCP",
+      "homepage": "https://github.com/manydominos/Autocad-MCP",
+      "repository": "https://github.com/manydominos/Autocad-MCP",
       "license": "MIT",
       "keywords": ["autocad", "cad", "dxf", "drafting", "mcp"],
       "category": "development"

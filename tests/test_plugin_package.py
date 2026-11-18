@@ -170,6 +170,9 @@ def _tool_mentions(text: str, prefixes: set[str], ignore: set[str]) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
+FORK_MAIN = "https://github.com/manydominos/Autocad-MCP/archive/refs/heads/main.zip"
+
+
 def test_versions_agree_across_package_plugin_marketplace_and_pin() -> None:
     import version as version_module
 
@@ -179,6 +182,8 @@ def test_versions_agree_across_package_plugin_marketplace_and_pin() -> None:
     entries = [entry for entry in marketplace["plugins"] if entry["name"] == PLUGIN_NAME]
     assert len(entries) == 1, f"marketplace lists {PLUGIN_NAME} {len(entries)} times"
     pins = re.findall(r"==(\d+\.\d+\.\d+)", PLUGIN_MCP.read_text(encoding="utf-8"))
+    if not pins and FORK_MAIN in PLUGIN_MCP.read_text(encoding="utf-8"):
+        pins = [expected]  # fork: the plugin runs the newest main, not a pinned release
 
     found = {
         "version.py": version_module.package_version(),
@@ -194,7 +199,7 @@ def test_versions_agree_across_package_plugin_marketplace_and_pin() -> None:
 
 def test_marketplace_lists_exactly_the_one_plugin_by_its_owner() -> None:
     marketplace = _json(MARKETPLACE)
-    assert marketplace["owner"]["name"] == "U-C4N"
+    assert marketplace["owner"]["name"] == "manydominos"  # fork; plugin author stays U-C4N
     assert [entry["name"] for entry in marketplace["plugins"]] == [PLUGIN_NAME]
     assert marketplace["plugins"][0]["source"] == "./plugin"
     assert _json(PLUGIN_MANIFEST)["name"] == PLUGIN_NAME
@@ -207,7 +212,10 @@ def test_mcp_json_runs_the_pinned_package_with_its_extras() -> None:
     assert server["command"] == "uvx"
     args = " ".join(server["args"])
     version = _pyproject_version()
-    assert f"autocad-mcp-pro[com,pdf,office]=={version}" in args
+    # Fork: the newest main of manydominos/Autocad-MCP, fetched again at every start.
+    assert f"autocad-mcp-pro[com,pdf,office] @ {FORK_MAIN}" in args
+    assert server["args"][:2] == ["--refresh-package", "autocad-mcp-pro"]
+    assert version
     assert server["args"][-1] == "autocad-mcp"
 
 

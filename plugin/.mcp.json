@@ -3,8 +3,10 @@
     "autocad": {
       "command": "uvx",
       "args": [
+        "--refresh-package",
+        "autocad-mcp-pro",
         "--from",
-        "${AUTOCAD_MCP_SOURCE:-autocad-mcp-pro[com,pdf,office]==1.8.0}",
+        "${AUTOCAD_MCP_SOURCE:-autocad-mcp-pro[com,pdf,office] @ https://github.com/manydominos/Autocad-MCP/archive/refs/heads/main.zip}",
         "autocad-mcp"
       ],
       "env": {

@@ -376,12 +376,23 @@ def _release_versions() -> dict[str, str]:
         for arg in server_entry.get("args", [])
         for pin in re.findall(r"==(\d+\.\d+\.\d+)", arg)
     ]
+    # Fork (manydominos): the plugin runs the newest main of the fork, not a PyPI
+    # release, so its source is the fork archive instead of a version pin.
+    fork_main = any(
+        "github.com/manydominos/Autocad-MCP/archive/refs/heads/main.zip" in arg
+        for server_entry in servers.values()
+        for arg in server_entry.get("args", [])
+    )
+    if fork_main and not pins:
+        pins = [_pyproject_version()]
     found["plugin/.mcp.json pin"] = pins[0] if len(pins) == 1 else f"<{len(pins)} pins>"
 
     readme_pins = re.findall(
         rf"{re.escape(name)}\[[^\]]*\]==(\d+\.\d+\.\d+)",
         (ROOT / "README.md").read_text(encoding="utf-8"),
     )
+    if fork_main and not readme_pins:
+        readme_pins = [_pyproject_version()]
     found["README plugin pin"] = (
         readme_pins[0] if len(readme_pins) == 1 else f"<{len(readme_pins)} pins>"
     )

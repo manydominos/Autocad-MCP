@@ -306,6 +306,13 @@ class Settings:
         )
         self.mcp_auth_token_readonly: str = os.environ.get("MCP_AUTH_TOKEN_READONLY", "").strip()
 
+        # Local v3 addition: ALLOW_NO_AUTH=true explicitly allows a non-loopback
+        # HTTP bind (with ALLOW_REMOTE_HTTP=true) WITHOUT MCP_AUTH_TOKEN, for a
+        # closed lab network. Default false = unchanged behaviour (refused).
+        self.allow_no_auth: bool = (
+            os.environ.get("ALLOW_NO_AUTH", "false").lower().strip() == "true"
+        )
+
         # Exposed tool profile: "full" (default, everything) or "lean" (a
         # curated 67-tool drafting/inspection core for clients with tight tool
         # caps). Invalid values fall back to "full" with a warning at startup;

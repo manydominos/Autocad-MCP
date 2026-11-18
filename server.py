@@ -15216,6 +15216,17 @@ def _validate_http_bind(host: str) -> None:
     if not (
         config.settings.mcp_auth_token or getattr(config.settings, "mcp_auth_token_readonly", "")
     ):
+        # Local v3 addition: explicit opt-out of the token for a closed network.
+        # ``is True`` so that only the real boolean setting counts.
+        if getattr(config.settings, "allow_no_auth", False) is True:
+            log.warning(
+                "!!! ALLOW_NO_AUTH=true: binding HTTP on non-loopback host '%s' "
+                "WITHOUT authentication (MCP_AUTH_TOKEN is not set). Any client "
+                "that can reach this address can run AutoCAD commands and read/"
+                "write files inside ALLOWED_PATHS. Use only on a closed network.",
+                host,
+            )
+            return
         raise SystemExit(
             f"Refusing to bind HTTP on '{host}' without MCP_AUTH_TOKEN. "
             "Set MCP_AUTH_TOKEN=<token> to enable bearer-token auth, or bind "

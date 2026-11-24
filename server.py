@@ -57,6 +57,7 @@ from engineering.errors import (
     ERROR_KINDS,
     CommandRefusedError,
     GateFailure,
+    InvalidArgsError,
     annotate,
     capability_of,
     cause_chain,
@@ -2384,7 +2385,7 @@ async def drawing_save_as(
         try:
             return await _backend(ctx).drawing_save_as(str(validated), fmt, version=version)
         except ValueError as exc:
-            raise ToolError(f"invalid_args: {exc}") from exc
+            raise InvalidArgsError(f"invalid_args: {exc}") from exc
     return await _backend(ctx).drawing_save_as(str(validated), fmt)
 
 

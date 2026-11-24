@@ -539,6 +539,21 @@ def _make_launched_visible(app, progid: str) -> None:
             ) from exc
 
 
+#: HRESULTs after which the cached Application proxy is dead: the next call
+#: attaches again with GetActiveObject. Fork (popravek/com-ponovna-povezava):
+#: after AutoCAD was closed and started again, every call answered
+#: 0x800706BA "The RPC server is unavailable" until the MCP server itself was
+#: restarted (inbox 2026-11-19, live test 2026-11-24).
+_RECONNECT_HRESULTS = (
+    -2147221246,  # 0x80040202 (upstream)
+    -2147221005,  # 0x800401F3 CO_E_CLASSSTRING (upstream)
+    -2147417842,  # 0x8001010E RPC_E_WRONG_THREAD (upstream)
+    -2147023174,  # 0x800706BA RPC_S_SERVER_UNAVAILABLE - AutoCAD gone
+    -2147023170,  # 0x800706BE RPC_S_CALL_FAILED
+    -2147417848,  # 0x80010108 RPC_E_DISCONNECTED - object disconnected from its clients
+)
+
+
 def _drop_app() -> None:
     """Forget the cached Application proxy (and the identity read from it)."""
     _COM_STATE.pop("app", None)
@@ -4488,7 +4503,7 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
             ) from e
         except _COM_ERROR as e:
             hr = e.args[0] if e.args else 0
-            if hr in (-2147221246, -2147221005, -2147417842):
+            if hr in _RECONNECT_HRESULTS:
                 _drop_app()
                 self._connected = False
             message = f"AutoCAD COM error ({hr:#010x}): {e.args[1] if len(e.args) > 1 else e}"

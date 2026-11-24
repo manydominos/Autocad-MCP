@@ -79,6 +79,16 @@ _BLOCKED_PATH_PATTERNS = re.compile(
 )
 
 
+#: The same patterns without the leading-``\\`` rule: for a plain UNC path
+#: (``\\host\share\...``) that lies inside an explicit UNC root of ALLOWED_PATHS.
+_BLOCKED_PATH_PATTERNS_UNC = re.compile(
+    r"(\.\.[\\/])"
+    r"|(%2e%2e)"
+    r"|(\\\\[?.]\\)"
+    r"|(\x00)",
+    re.IGNORECASE,
+)
+
 _DRIVE_ANCHOR = re.compile(r"^[A-Za-z]:$")
 
 
@@ -264,7 +274,18 @@ def validate_path(path: str, *, allow_write: bool = False, kinds=None) -> Path:
     if not path or not path.strip():
         raise ToolError("File path cannot be empty.")
 
-    if _BLOCKED_PATH_PATTERNS.search(path):
+    # Fork (popravek/unc-poti): a backslash UNC path inside an explicit UNC root
+    # of ALLOWED_PATHS is the path the server itself reports for a mapped share
+    # (\\vmware-host\Shared Folders\...); it was refused as "traversal" by the
+    # leading-\\ rule. Every other rule still applies, and the admin, local-host
+    # and \\?\ / \\.\ forms are never accepted (_unc_inside_allowed_root).
+    plain_unc_inside = (
+        os.name == "nt"
+        and _is_plain_unc_drive(Path(path).drive)
+        and _unc_inside_allowed_root(Path(path))
+    )
+    patterns = _BLOCKED_PATH_PATTERNS_UNC if plain_unc_inside else _BLOCKED_PATH_PATTERNS
+    if patterns.search(path):
         log.warning("Blocked path traversal attempt: %s", path)
         raise PathRefusedError(
             f"Path rejected: suspicious traversal pattern detected in '{path}'. "

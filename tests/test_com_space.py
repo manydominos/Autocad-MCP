@@ -509,7 +509,9 @@ async def test_a_completed_command_reports_what_it_created_and_where(com, seat):
     doc = seat.doc
     doc.ModelSpace.add("AcDbLine")  # an older entity is never "created"
     doc.on_command = _draws_in("Model")
-    result = await com.system_run_command("_CIRCLE 0,0 1")
+    # check_command=False: the fake seat runs on_command for every SendCommand,
+    # the fork's (getcname) check included (tested in test_command_escape.py).
+    result = await com.system_run_command("_CIRCLE 0,0 1", check_command=False)
     assert result["ok"] is True and result["completed"] is True
     assert result["command"] == "_CIRCLE 0,0 1"
     assert result["created_count"] == 1
@@ -554,7 +556,7 @@ async def test_a_command_left_at_a_prompt_is_command_incomplete(com, seat, short
     prompt = "Specify scale factor or [Copy/Reference]:"
     doc.on_command = _stops_at(prompt)
     with pytest.raises(CommandIncompleteError) as raised:
-        await com.system_run_command("_SCALE")
+        await com.system_run_command("_SCALE", check_command=False)
     error = raised.value
     assert error.last_prompt == prompt, "the prompt it stopped at, read before the ESCs"
     assert error.command == "_SCALE"
@@ -577,7 +579,9 @@ async def test_command_incomplete_reaches_the_client_as_a_typed_envelope(
     monkeypatch.setattr(server, "_make_backend", make)
     async with Client(server.mcp) as client:
         result = await client.call_tool(
-            "system_run_command", {"command": "_SCALE"}, raise_on_error=False
+            "system_run_command",
+            {"command": "_SCALE", "check_command": False},
+            raise_on_error=False,
         )
     assert result.is_error is True
     payload = result.structured_content

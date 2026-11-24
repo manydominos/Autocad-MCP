@@ -202,6 +202,17 @@ class Settings:
         # inside COM_CALL_TIMEOUT, so the STA job always comes back.
         self.command_deadline_s: float = max(0.1, float(os.environ.get("COMMAND_DEADLINE_S", "8")))
 
+        # Fork (popravek/ukaz-esc): a SendCommand left at a prompt does not
+        # return at all, so command_deadline_s above is never reached and the
+        # call used to end in COM_CALL_TIMEOUT with the COM thread abandoned.
+        # After COMMAND_ESCAPE_AFTER_S system_run_command posts ESC x3 to
+        # AutoCAD's window through Win32 (no COM), which answers the prompt;
+        # the call then ends as command_incomplete. Empty = COM_CALL_TIMEOUT - 2.
+        raw_escape = os.environ.get("COMMAND_ESCAPE_AFTER_S", "").strip()
+        self.command_escape_after_s: float | None = (
+            max(0.5, float(raw_escape)) if raw_escape else None
+        )
+
         # 1.8-23: the live engine refreshes the display once per COM job, not
         # once per entity. A job that asked for at most COM_REFRESH_UPDATE_MAX
         # refreshes, each naming its entity, calls Update() on the last one;

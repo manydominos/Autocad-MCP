@@ -17,6 +17,7 @@ import io
 import logging
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -3070,6 +3071,27 @@ def _target_tab(doc):
                 doc.ActiveLayout = doc.Layouts.Item(previous)
             except Exception as exc:
                 log.warning("could not restore the operator's layout tab %r: %s", previous, exc)
+
+
+_COMMAND_TOKEN = re.compile(r"-?[A-Za-z][A-Za-z0-9_\-]*")
+
+
+def first_command_token(command: str) -> str | None:
+    """The first command of a SendCommand string, upper case, for (getcname).
+
+    ``_`` and ``.`` prefixes are dropped, a leading ``-`` (command-line form)
+    is kept: ``"_-POINTCLOUDCROP ..."`` -> ``"-POINTCLOUDCROP"``. ``None`` for
+    what is not a plain command name - a LISP expression, a transparent
+    ``'`` command, an empty string or unusual characters - which is then
+    sent unchecked, as before.
+    """
+    text = (command or "").lstrip()
+    if not text or text[0] in "('":
+        return None
+    token = re.split(r"[\s;,]", text, maxsplit=1)[0].lstrip("_.")
+    if not token or not _COMMAND_TOKEN.fullmatch(token):
+        return None
+    return token.upper()
 
 
 def _read_last_prompt(doc) -> str | None:
@@ -10375,7 +10397,82 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
 
         return await self._run(_sync)
 
-    async def system_run_command(self, command) -> dict:
+    def _command_known_sync(self, token: str) -> bool | None:
+        """Does AutoCAD know ``token`` as a command? ``None`` = could not tell.
+
+        ``(getcname)`` for the local and the ``_`` English name, and
+        ``atoms-family`` for a LISP-defined ``C:`` command; the answer travels
+        through USERS1, which is restored. Any failure is ``None`` - the check
+        may only ever add a refusal it is sure of, never block a command.
+        """
+        doc = _acad_doc()
+        try:
+            if int(doc.GetVariable("CMDACTIVE")):
+                return None
+        except Exception:
+            return None
+        expr = (
+            f'(setvar "USERS1" (if (or (getcname "{token}") (getcname "_{token}") '
+            f'(car (atoms-family 1 (list "C:{token}")))) "1" "0"))'
+        )
+        try:
+            previous = doc.GetVariable("USERS1")
+        except Exception:
+            previous = None
+        try:
+            doc.SetVariable("USERS1", "")
+            # A bare LISP form: no prompt, no layout snapshot (O(1) reads).
+            doc.SendCommand(expr + "\n")
+            deadline = time.monotonic() + 2.0
+            while int(doc.GetVariable("CMDACTIVE")) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            value = str(doc.GetVariable("USERS1") or "")
+        except Exception as exc:  # unknown, never a refusal
+            log.debug("command check for %s failed: %s", token, exc)
+            return None
+        finally:
+            if previous is not None:
+                try:
+                    doc.SetVariable("USERS1", previous)
+                except Exception:
+                    log.debug("could not restore USERS1", exc_info=True)
+        return {"1": True, "0": False}.get(value)
+
+    async def _run_escaping(self, func, escaped: dict):
+        """``_run`` with an ESC watchdog for a command left at a prompt.
+
+        After ``COMMAND_ESCAPE_AFTER_S`` (default ``COM_CALL_TIMEOUT`` - 2 s)
+        with the job still inside ``SendCommand``, ESC x3 is posted to
+        AutoCAD's window through Win32 (``win_dialogs.send_escape``) - the
+        only route that answers a prompt - and ``escaped`` records it, so the
+        job, once ``SendCommand`` returns, reports ``command_incomplete``
+        instead of the COM thread being abandoned at ``COM_CALL_TIMEOUT``.
+        """
+        after = config.settings.command_escape_after_s
+        timeout = float(config.settings.com_call_timeout)
+        if after is None:
+            after = timeout - 2.0 if timeout > 0 else None
+        task = asyncio.ensure_future(self._run(func))
+        if after is None or after <= 0:
+            return await task
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=after)
+            if not done and win_dialogs.available():
+                escaped["after_s"] = after
+                try:
+                    report = await asyncio.wait_for(
+                        asyncio.to_thread(win_dialogs.send_escape, 3), timeout=5
+                    )
+                except Exception as exc:  # the COM deadline still applies
+                    report = {"sent": 0, "error": str(exc)}
+                escaped["sent"] = int(report.get("sent") or 0)
+                escaped["targets"] = report.get("targets")
+            return await task
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+
+    async def system_run_command(self, command, check_command: bool = True) -> dict:
         # Commands ending in option menus (e.g. -LINETYPE returning to its
         # [?/Create/Load/Set] prompt) need a trailing blank line or _X to exit;
         # otherwise SendCommand returns but AutoCAD stays at a prompt and the
@@ -10385,6 +10482,27 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         # (COMMAND_DEADLINE_S), reports what the command created in which space
         # and raises command_incomplete with LASTPROMPT when it stays at a prompt.
         # Up to 1.7.0 this answered ok: True the moment SendCommand returned.
+        #
+        # Fork (popravek/ukaz-esc): (1) the first command of the string is
+        # checked with (getcname) before anything is sent - "-POINTCLOUDCROP"
+        # does not exist, and AutoCAD then ran the rest of the string as new
+        # commands (a stray LINE); (2) a command left at a prompt is answered
+        # with ESC through Win32 after COMMAND_ESCAPE_AFTER_S and reported as
+        # command_incomplete, instead of blocking COM until a human presses ESC.
+        token = first_command_token(command) if check_command else None
+        if token is not None:
+            known = await self._run(self._command_known_sync, token)
+            if known is False:
+                from fastmcp.exceptions import ToolError
+
+                raise ToolError(
+                    f"unknown_command: AutoCAD has no command {token!r} (getcname and "
+                    "C: LISP commands checked); nothing was sent. Check the spelling - "
+                    "many commands have no '-' command-line form. For a PGP alias pass "
+                    "check_command=false."
+                )
+        escaped: dict = {}
+
         def _sync():
             doc = _acad_doc()
             # CMDACTIVE is read on the document (the Application has no
@@ -10396,9 +10514,16 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                     f"{cmd_active}). Press ESC in AutoCAD to cancel, then retry."
                 )
             outcome = self._safe_send_command(doc, command)
-            return {"ok": True, "command": command, **outcome.report()}
+            # "after_s" is written before the ESC is posted, so the job sees it
+            # even when SendCommand returns before send_escape does.
+            if "after_s" in escaped:
+                raise CommandIncompleteError(command, outcome.last_prompt, escaped["after_s"])
+            report = {"ok": True, "command": command, **outcome.report()}
+            if token is not None:
+                report["command_checked"] = token
+            return report
 
-        return await self._run(_sync)
+        return await self._run_escaping(_sync, escaped)
 
     async def system_run_lisp(self, expression) -> dict:
         def _sync():

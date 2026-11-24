@@ -277,6 +277,85 @@ def summarize(dialogs: list[dict[str, Any]]) -> str:
     return "; ".join(parts)
 
 
+class _GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("hwndActive", ctypes.c_void_p),
+        ("hwndFocus", ctypes.c_void_p),
+        ("hwndCapture", ctypes.c_void_p),
+        ("hwndMenuOwner", ctypes.c_void_p),
+        ("hwndMoveSize", ctypes.c_void_p),
+        ("hwndCaret", ctypes.c_void_p),
+        ("rcCaret", ctypes.c_long * 4),
+    ]
+
+
+def _focus_of_thread(thread_id: int) -> int | None:
+    """The window with the keyboard focus on ``thread_id`` (GetGUIThreadInfo)."""
+    try:
+        info = _GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(_GUITHREADINFO)
+        if not ctypes.windll.user32.GetGUIThreadInfo(int(thread_id), ctypes.byref(info)):
+            return None
+        return int(info.hwndFocus) if info.hwndFocus else None
+    except Exception as exc:  # pragma: no cover - Win32 only
+        log.debug("GetGUIThreadInfo failed: %s", exc)
+        return None
+
+
+def main_windows() -> list[int]:
+    """The CAD processes' visible main (unowned, non-dialog) windows."""
+    if not _WIN32_OK:
+        return []
+    found = []
+    for hwnd, _pid, _exe in _cad_windows():
+        try:
+            if win32gui.GetWindow(hwnd, win32con.GW_OWNER):
+                continue
+            if win32gui.GetClassName(hwnd) == _DIALOG_CLASS:
+                continue
+            found.append(int(hwnd))
+        except Exception as exc:  # a window may vanish while it is read
+            log.debug("window %s skipped: %s", hwnd, exc)
+    return found
+
+
+def send_escape(times: int = 3) -> dict[str, Any]:
+    """Post ESC keystrokes to AutoCAD's command line - Win32 only, never COM.
+
+    A command that stops at a prompt keeps ``SendCommand`` from returning,
+    and no ActiveX call can answer the prompt (measured on 1.8-05), so the
+    key is posted to the window that has the keyboard focus on the main
+    window's GUI thread (the command line, usually), else to the main window.
+    Only windows of the CAD processes are addressed (``process_names``).
+    """
+    if not _WIN32_OK:
+        return {"sent": 0, "targets": [], "reason": "win32_only"}
+    targets: list[int] = []
+    for hwnd in main_windows():
+        try:
+            thread_id, _pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            thread_id = None
+        focus = _focus_of_thread(thread_id) if thread_id else None
+        target = focus or hwnd
+        if target not in targets:
+            targets.append(target)
+    sent = 0
+    for target in targets:
+        for _ in range(max(1, int(times))):
+            try:
+                win32gui.PostMessage(target, win32con.WM_KEYDOWN, win32con.VK_ESCAPE, 0x00010001)
+                win32gui.PostMessage(target, win32con.WM_KEYUP, win32con.VK_ESCAPE, 0xC0010001)
+                sent += 1
+            except Exception as exc:
+                log.debug("ESC to %s failed: %s", target, exc)
+    if sent:
+        log.warning("ESC x%s posted to AutoCAD window(s) %s", times, targets)
+    return {"sent": sent, "targets": targets}
+
+
 def close_dialog(hwnd: int, action: str = "cancel", *, wait_s: float = 3.0) -> dict[str, Any]:
     """Dismiss one listed dialog with Cancel, Esc or Close - nothing else.
 

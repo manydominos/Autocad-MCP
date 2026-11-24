@@ -13073,6 +13073,201 @@ async def drawing_export_dwg(
 
 
 # ---------------------------------------------------------------------------
+# ── SECTION 24a: Point Clouds (6 tools) ─────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Fork (popravek/oblak-tock): RCS/RCP point clouds through the McpPointCloud
+# .NET add-in (backends/pointcloud.py, addin/McpPointCloud).
+
+
+def _pc_handle(handle: str) -> str | None:
+    text = (handle or "").strip()
+    if text and not all(c in "0123456789abcdefABCDEF" for c in text):
+        raise InvalidArgsError(f"invalid_args: handle must be hexadecimal, got {handle!r}")
+    return text or None
+
+
+@cad_tool(summary="Attach an RCS/RCP point cloud without prompts.", cost="mutate")
+@mcp.tool(
+    annotations={"title": "Point Cloud: Attach", "destructiveHint": False},
+    tags={"view"},
+)
+async def pointcloud_attach(
+    path: Annotated[str, Field(description="Full path of the .rcs or .rcp file.")],
+    scale: Annotated[float, Field(gt=0, description="Scale, e.g. 1000 for metres into mm.")],
+    insert: Annotated[list[float] | None, "Insertion [x, y, z]; default 0,0,0"] = None,
+    rotation_deg: Annotated[float, "Rotation about Z, degrees"] = 0.0,
+    layer: Annotated[str, "Layer (created if missing)"] = "",
+    ctx: Context = None,
+) -> dict:
+    """Attach a ReCap point cloud (.rcs/.rcp), no prompt; check `geom_extents`.
+    Live only, via the McpPointCloud add-in (`addin_not_loaded` names the folder to trust)."""
+    validated = validate_path(path)
+    if validated.suffix.lower() not in (".rcs", ".rcp"):
+        raise InvalidArgsError(f"invalid_args: a point cloud is .rcs or .rcp, got {validated.name!r}")
+    if insert is not None and len(insert) not in (2, 3):
+        raise InvalidArgsError("invalid_args: insert is [x, y] or [x, y, z]")
+    payload = {
+        "path": str(path),
+        "insert": list(insert or [0.0, 0.0, 0.0]),
+        "scale": float(scale),
+        "rotation_deg": float(rotation_deg),
+        "layer": layer or None,
+    }
+    await ctx.info(f"Attaching point cloud {validated.name}")
+    return await _backend(ctx).pointcloud("attach", payload)
+
+
+@cad_tool(summary="Read attached point clouds: file, transform, extents, scans, crops.", cost="read")
+@mcp.tool(
+    annotations={"title": "Point Cloud: Info", "readOnlyHint": True},
+    tags={"view"},
+)
+async def pointcloud_info(
+    cloud: Annotated[str, "Point cloud handle (hex); empty = all"] = "",
+    items: Annotated[bool, "List scans and regions"] = True,
+    ctx: Context = None,
+) -> dict:
+    """Attached point clouds: path, transform, extents, points, crops, style; scans
+    with origins (RCP only). Live only."""
+    payload = {"handle": _pc_handle(cloud), "items": bool(items)}
+    return await _backend(ctx).pointcloud("info", payload)
+
+
+@cad_tool(summary="Crop a point cloud to an outline and a height band.", cost="mutate")
+@mcp.tool(
+    annotations={"title": "Point Cloud: Crop", "destructiveHint": False},
+    tags={"view"},
+)
+async def pointcloud_crop(
+    polygon: Annotated[list[list[float]], "Outline [[a, b], ...]: x,y (top), x,z (front), y,z (side)"],
+    cloud: Annotated[str, "Point cloud handle (hex); empty = the only one"] = "",
+    plane: Annotated[str, "top, front or side"] = "top",
+    zmin: Annotated[float | None, "top: band bottom (WCS Z)"] = None,
+    zmax: Annotated[float | None, "top: band top (WCS Z)"] = None,
+    zband_mode: Annotated[str, "elevation (hide by height) or crop (second crop)"] = "elevation",
+    inside: Annotated[bool, "Keep inside the outline"] = True,
+    inverted: Annotated[bool, "Invert"] = False,
+    replace: Annotated[bool, "Remove earlier crops"] = True,
+    vertex_space: Annotated[str, "wcs or native (the cloud's own)"] = "wcs",
+    ctx: Context = None,
+) -> dict:
+    """Crop: plan = top + outline + zmin/zmax; section = front/side outline. Live only."""
+    if plane not in ("top", "front", "side"):
+        raise InvalidArgsError("invalid_args: plane is top, front or side")
+    if zband_mode not in ("elevation", "crop"):
+        raise InvalidArgsError("invalid_args: zband_mode is elevation or crop")
+    if vertex_space not in ("wcs", "native"):
+        raise InvalidArgsError("invalid_args: vertex_space is wcs or native")
+    if len(polygon) < 3 or any(len(p) < 2 for p in polygon):
+        raise InvalidArgsError("invalid_args: polygon needs three or more [a, b] points")
+    if (zmin is None) != (zmax is None):
+        raise InvalidArgsError("invalid_args: give both zmin and zmax, or neither")
+    if zmin is not None and zmax is not None and zmax <= zmin:
+        raise InvalidArgsError("invalid_args: zmax must be above zmin")
+    payload = {
+        "handle": _pc_handle(cloud),
+        "polygon": [[float(p[0]), float(p[1])] for p in polygon],
+        "plane": plane,
+        "zmin": zmin,
+        "zmax": zmax,
+        "zband_mode": zband_mode,
+        "inside": bool(inside),
+        "inverted": bool(inverted),
+        "replace": bool(replace),
+        "vertex_space": vertex_space,
+    }
+    return await _backend(ctx).pointcloud("crop", payload)
+
+
+@cad_tool(summary="Remove every crop of a point cloud.", cost="mutate")
+@mcp.tool(
+    annotations={"title": "Point Cloud: Clear Crop", "destructiveHint": False},
+    tags={"view"},
+)
+async def pointcloud_crop_clear(
+    cloud: Annotated[str, "Point cloud handle (hex); empty = the only one"] = "",
+    reset_style: Annotated[bool, "Also true colours, no height band"] = True,
+    ctx: Context = None,
+) -> dict:
+    """Clear all crops of a point cloud (and by default the height band)."""
+    payload = {"handle": _pc_handle(cloud), "reset_style": bool(reset_style)}
+    return await _backend(ctx).pointcloud("crop_clear", payload)
+
+
+@cad_tool(summary="Colour and density of a point cloud's display.", cost="mutate")
+@mcp.tool(
+    annotations={"title": "Point Cloud: Style", "destructiveHint": False},
+    tags={"view"},
+)
+async def pointcloud_style(
+    cloud: Annotated[str, "Point cloud handle (hex); empty = the only one"] = "",
+    stylization: Annotated[str | None, "truecolor single normal height intensity classification"] = None,
+    color_scheme: Annotated[str | None, "Colour scheme name"] = None,
+    elevation: Annotated[list[float] | None, "Height range [min, max]"] = None,
+    elevation_out_of_range: Annotated[str | None, "hide, minmax or rgb"] = None,
+    intensity: Annotated[list[float] | None, "Intensity range [min, max]"] = None,
+    show_cropped: Annotated[bool | None, "Show the cropped cloud"] = None,
+    scans_visible: Annotated[bool | None, "All scans on/off"] = None,
+    point_size: Annotated[int | None, "POINTCLOUDPOINTSIZE"] = None,
+    lod: Annotated[int | None, "POINTCLOUDLOD 1-10"] = None,
+    ctx: Context = None,
+) -> dict:
+    """Point cloud display; only given values change. Live only."""
+    allowed = {"truecolor", "single", "normal", "height", "intensity", "classification"}
+    if stylization is not None and stylization not in allowed:
+        raise InvalidArgsError(f"invalid_args: stylization is one of {sorted(allowed)}")
+    if elevation_out_of_range is not None and elevation_out_of_range not in ("hide", "minmax", "rgb"):
+        raise InvalidArgsError("invalid_args: elevation_out_of_range is hide, minmax or rgb")
+    for name, value in (("elevation", elevation), ("intensity", intensity)):
+        if value is not None and len(value) != 2:
+            raise InvalidArgsError(f"invalid_args: {name} is [min, max]")
+    if lod is not None and not 1 <= lod <= 10:
+        raise InvalidArgsError("invalid_args: lod is 1-10")
+    payload = {
+        "handle": _pc_handle(cloud),
+        "stylization": stylization,
+        "color_scheme": color_scheme,
+        "elevation": elevation,
+        "elevation_out_of_range": elevation_out_of_range,
+        "intensity": intensity,
+        "show_cropped": show_cropped,
+        "scans_visible": scans_visible,
+        "point_size": point_size,
+        "lod": lod,
+    }
+    return await _backend(ctx).pointcloud("style", payload)
+
+
+@cad_tool(summary="Let AutoCAD extract a section of a point cloud as lines.", cost="mutate")
+@mcp.tool(
+    annotations={"title": "Point Cloud: Section Lines", "destructiveHint": False},
+    tags={"view"},
+)
+async def pointcloud_section(
+    origin: Annotated[list[float], "Point on the plane [x, y, z]"],
+    cloud: Annotated[str, "Point cloud handle (hex); empty = the only one"] = "",
+    normal: Annotated[list[float] | None, "Plane normal; default [0, 0, 1]"] = None,
+    xdir: Annotated[list[float] | None, "In-plane X; default [1, 0, 0]"] = None,
+    layer: Annotated[str, "Layer of the lines"] = "KONTROLA_OBLAK",
+    as_polyline: Annotated[bool, "Polylines, else lines/arcs"] = True,
+    ctx: Context = None,
+) -> dict:
+    """AutoCAD's section lines through a plane onto `layer`. Experimental. Live only."""
+    for name, value in (("origin", origin), ("normal", normal), ("xdir", xdir)):
+        if value is not None and len(value) != 3:
+            raise InvalidArgsError(f"invalid_args: {name} is [x, y, z]")
+    payload = {
+        "handle": _pc_handle(cloud),
+        "origin": origin,
+        "normal": normal or [0.0, 0.0, 1.0],
+        "xdir": xdir or [1.0, 0.0, 0.0],
+        "layer": layer or "KONTROLA_OBLAK",
+        "as_polyline": bool(as_polyline),
+    }
+    return await _backend(ctx).pointcloud("section", payload)
+
+
+# ---------------------------------------------------------------------------
 # ── SECTION 25: Architecture (12 tools) ─────────────────────────────────────
 # ---------------------------------------------------------------------------
 

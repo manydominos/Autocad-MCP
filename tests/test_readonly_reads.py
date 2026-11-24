@@ -50,6 +50,7 @@ NO_DOCUMENT_READ = {
     "analysis_measure_distance": "arithmetic on the two points it is given",
     "analysis_measure_area": "arithmetic on the polygon it is given",
     "selection_get": "returns the backend's remembered selection",
+    "pointcloud_info": "live-only (capability pointcloud): the McpPointCloud add-in reads it",
 }
 
 #: Read tools that reach ``_async`` WITHOUT ``readonly=True`` on purpose.

@@ -2778,6 +2778,43 @@ def _layer_info(layer, current_layer_name: str) -> LayerInfo:
 # ---------------------------------------------------------------------------
 
 
+#: VSCURRENT command keywords (global, English) of the built-in visual styles
+#: view_capture may switch to and back from; keyed by the lower-case,
+#: space-free name VSCURRENT reports.
+_VISUAL_STYLE_KEYWORDS = {
+    "2dwireframe": "_2dwireframe",
+    "wireframe": "_Wireframe",
+    "hidden": "_Hidden",
+    "realistic": "_Realistic",
+    "conceptual": "_Conceptual",
+    "shaded": "_Shaded",
+}
+
+
+def _has_point_cloud(doc) -> bool:
+    """Is there a point cloud (AcDbPointCloudEx) anywhere in the drawing?
+
+    One filtered selection set (group 0 = ACDBPOINTCLOUDEX); any failure is
+    "no" - the caller then keeps the operator's visual style.
+    """
+    name = f"_PCQ_{uuid.uuid4().hex[:8]}"
+    try:
+        selection = doc.SelectionSets.Add(name)
+    except Exception:
+        return False
+    try:
+        selection.Select(_AC_SELECTION_SET_ALL, None, None, _ai([0]), _avar(["ACDBPOINTCLOUDEX"]))
+        return int(selection.Count) > 0
+    except Exception:
+        log.debug("point cloud query failed", exc_info=True)
+        return False
+    finally:
+        try:
+            selection.Delete()
+        except Exception:
+            pass
+
+
 #: System variables ``view_capture`` sets to 0 for the shot and restores:
 #: ViewCube, navigation bar, UCS icon, grid.
 _CAPTURE_HIDDEN_UI = ("NAVVCUBEDISPLAY", "NAVBARDISPLAY", "UCSICON", "GRIDMODE")
@@ -10087,6 +10124,7 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         max_px: int = 2048,
         hide_ui: bool = True,
         settle_s: float = 1.0,
+        visual_style: str = "auto",
     ) -> dict:
         """The drawing area of AutoCAD as it is drawn - point clouds, rasters
         and all - with the drawing coordinates of its pixels (fork, popravek/view-capture).
@@ -10105,12 +10143,39 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         size = check_max_px(max_px)
         wanted = normalize_region(window) if window is not None else None
         settle = min(max(float(settle_s), 0.0), 30.0)
+        style_choice = (visual_style or "auto").strip().lower().replace(" ", "")
+        if style_choice not in ("auto", "keep", *_VISUAL_STYLE_KEYWORDS):
+            raise ValueError(
+                f"visual_style is auto, keep or one of {sorted(_VISUAL_STYLE_KEYWORDS)}, "
+                f"got {visual_style!r}"
+            )
+        style_report: dict[str, Any] = {}
 
         def _sync():
             app = _acad_app()
             doc = _acad_doc()
             if wanted is not None:
                 app.ZoomWindow(_apoint(wanted[0], wanted[1]), _apoint(wanted[2], wanted[3]))
+            # AutoCAD does not draw point clouds in 2D Wireframe ("Point clouds
+            # are not displayed in 2D Wireframe", live 2026-11-24): `auto`
+            # switches such a view to Hidden for the shot and back after.
+            previous_style = None
+            try:
+                previous_style = str(doc.GetVariable("VSCURRENT"))
+            except Exception:
+                log.debug("VSCURRENT unreadable", exc_info=True)
+            target = None
+            if previous_style is not None and style_choice != "keep":
+                current = previous_style.lower().replace(" ", "")
+                if style_choice == "auto":
+                    if current == "2dwireframe" and _has_point_cloud(doc):
+                        target = "hidden"
+                elif style_choice != current:
+                    target = style_choice
+            style_report.update(previous=previous_style, used=previous_style, restored=None)
+            if target is not None:
+                self._safe_send_command(doc, f"_.VSCURRENT {_VISUAL_STYLE_KEYWORDS[target]}")
+                style_report["used"] = str(doc.GetVariable("VSCURRENT"))
             saved: dict[str, Any] = {}
             if hide_ui:
                 for name in _CAPTURE_HIDDEN_UI:
@@ -10136,6 +10201,21 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                         _set_variable(doc, name, value)
                     except Exception:
                         log.debug("could not restore %s", name, exc_info=True)
+                if target is not None:
+                    back = _VISUAL_STYLE_KEYWORDS.get(previous_style.lower().replace(" ", ""))
+                    if back is None:
+                        style_report["restored"] = False
+                        style_report["note"] = (
+                            f"the previous visual style {previous_style!r} has no command "
+                            "keyword here; restore it in AutoCAD (VSCURRENT)"
+                        )
+                    else:
+                        try:
+                            self._safe_send_command(doc, f"_.VSCURRENT {back}")
+                            style_report["restored"] = True
+                        except Exception as exc:
+                            style_report["restored"] = False
+                            style_report["note"] = f"restoring {previous_style!r} failed: {exc}"
             return png, frame, view_hwnd
 
         png, frame, view_hwnd = await self._run(_sync)
@@ -10154,6 +10234,7 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
             width, height = png_size(png)
         report = capture_report(frame, (width, height), factor)
         report["source"] = "view_window"
+        report["visual_style"] = dict(style_report)
         if path:
             report["path"] = _write_capture(path, png, report)
         report["png"] = png

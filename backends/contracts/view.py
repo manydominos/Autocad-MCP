@@ -49,6 +49,7 @@ class ViewContract(ABC):
         max_px: int = 2048,
         hide_ui: bool = True,
         settle_s: float = 1.0,
+        visual_style: str = "auto",
     ) -> dict:
         """The live view as AutoCAD draws it, with its drawing scale (fork).
 

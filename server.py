@@ -7154,6 +7154,7 @@ async def view_capture(
     max_px: Annotated[int, Field(description="Long side, 64-4096 px.", ge=64, le=4096)] = 2048,
     hide_ui: Annotated[bool, "Hide ViewCube, nav bar, UCS icon, grid"] = True,
     settle_s: Annotated[float, Field(description="Wait before the shot, s.", ge=0, le=30)] = 1.0,
+    visual_style: Annotated[str, "auto (Hidden for a cloud in 2D Wireframe), keep, or a style"] = "auto",
     ctx: Context = None,
 ):
     """The view window as AutoCAD draws it (point clouds too, unlike view_render),
@@ -7163,9 +7164,17 @@ async def view_capture(
         shot = str(validate_path(path, allow_write=True, kinds=KINDS_IMAGE))
     if window is not None and len(window) != 4:
         raise InvalidArgsError("invalid_args: view_capture window needs four numbers [x0, y0, x1, y1]")
-    report = await _backend(ctx).view_capture(
-        window=window, path=shot, max_px=max_px, hide_ui=hide_ui, settle_s=settle_s
-    )
+    try:
+        report = await _backend(ctx).view_capture(
+            window=window,
+            path=shot,
+            max_px=max_px,
+            hide_ui=hide_ui,
+            settle_s=settle_s,
+            visual_style=visual_style,
+        )
+    except ValueError as exc:
+        raise InvalidArgsError(f"invalid_args: {exc}") from exc
     return _view_image_result(report, "View capture unavailable.")
 
 

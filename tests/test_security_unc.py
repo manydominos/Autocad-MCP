@@ -143,10 +143,27 @@ class TestGuardsUnchanged:
         with pytest.raises(ToolError, match="system directory"):
             validate_path("//./C:/Windows/win.ini")
 
-    def test_backslash_unc_input_is_still_a_pattern_rejection(self, allowed):
+    def test_backslash_unc_inside_the_root_is_accepted(self, allowed, monkeypatch):
+        # Fork (popravek/unc-poti): the server reports \\vmware-host\... paths
+        # itself; inside an explicit UNC root they are accepted as typed.
         allowed(SHARE)
+        monkeypatch.setattr(security.Path, "resolve", lambda self, strict=False: self)
+        assert str(validate_path(SHARE + r"\x.dxf")).lower() == (SHARE + r"\x.dxf").lower()
+
+    def test_backslash_unc_outside_the_root_is_still_a_pattern_rejection(self, allowed):
+        allowed(SHARE + r"\inner")
         with pytest.raises(ToolError, match="traversal"):
             validate_path(SHARE + r"\x.dxf")
+
+    def test_backslash_unc_without_allowed_paths_is_still_refused(self, allowed):
+        allowed()
+        with pytest.raises(ToolError, match="traversal"):
+            validate_path(SHARE + r"\x.dxf")
+
+    def test_backslash_unc_traversal_is_still_refused(self, allowed):
+        allowed(SHARE)
+        with pytest.raises(ToolError, match="traversal"):
+            validate_path(SHARE + r"\a\..\x.dxf")
 
     def test_traversal_is_still_rejected(self, allowed):
         allowed(SHARE)

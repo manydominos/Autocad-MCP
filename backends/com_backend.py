@@ -2910,6 +2910,69 @@ def _window_dpi(user32, hwnd: int) -> int | None:
     return dpi if dpi > 0 else None
 
 
+def _audit_deadline_s() -> float:
+    """How long ``drawing_audit`` waits for AUDIT: inside ``COM_CALL_TIMEOUT``."""
+    timeout = float(config.settings.com_call_timeout)
+    if timeout <= 0:
+        return 600.0
+    return max(float(config.settings.command_deadline_s), timeout - 2.0)
+
+
+def _wait_command_idle(doc, deadline_s: float) -> bool:
+    """Poll ``CMDACTIVE`` until it is 0; ``False`` when ``deadline_s`` ran out."""
+    deadline = time.monotonic() + float(deadline_s)
+    while True:
+        try:
+            if not int(doc.GetVariable("CMDACTIVE")):
+                return True
+        except Exception:
+            return True  # unreadable: nothing more to wait on
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _fresh_file(path: Path, before_mtime: float | None) -> bool:
+    """``path`` exists and was written after ``before_mtime`` (or is new)."""
+    try:
+        if not path.exists():
+            return False
+        return before_mtime is None or path.stat().st_mtime > before_mtime
+    except OSError:
+        return False
+
+
+_AUDIT_TOTAL = re.compile(r"Total errors found\s+(\d+)\s+fixed\s+(\d+)", re.IGNORECASE)
+_AUDIT_ERASED = re.compile(r"Erased\s+(\d+)\s+objects?", re.IGNORECASE)
+
+
+def parse_audit_log(path) -> dict | None:
+    """``{"error_count", "fix_count", "erased"}`` from AutoCAD's ``.adt`` log.
+
+    The last "Total errors found N fixed M" line counts (a log can hold more
+    than one run); ``None`` when the log has no such line. The log is English
+    on an English seat; a localised seat writes other words and reads as
+    ``None`` (unknown) rather than as a wrong number.
+    """
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return None
+    text = raw.decode("utf-8", errors="replace")
+    if "Total errors" not in text and "\x00" in text:
+        text = raw.decode("utf-16", errors="replace")
+    totals = _AUDIT_TOTAL.findall(text)
+    if not totals:
+        return None
+    errors, fixed = totals[-1]
+    erased = _AUDIT_ERASED.findall(text)
+    return {
+        "error_count": int(errors),
+        "fix_count": int(fixed),
+        "erased": int(erased[-1]) if erased else None,
+    }
+
+
 def _capture_window(hwnd: int) -> bytes | None:
     """Capture an AutoCAD window using GDI PrintWindow, in physical pixels (#17).
 
@@ -7202,12 +7265,16 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         return await self._run(_sync)
 
     async def drawing_audit(self) -> dict:
-        """Run AutoCAD's AUDIT with fixing enabled, and admit what we cannot see.
+        """Run AutoCAD's AUDIT with fixing enabled, wait for it, read its counts.
 
         The ``Y`` answers AUDIT's "Fix any errors detected?" prompt, so this
-        backend does repair — it just gets nothing machine-readable back from
-        ``SendCommand``. The counts are therefore reported as ``None`` rather
-        than ``0``: zero would mean "nothing was wrong", which we do not know.
+        backend does repair. Fork (popravek/audit-stevci): the call no longer
+        returns while AUDIT is still queued - it waits for ``CMDACTIVE`` to
+        clear (a ``drawing_save`` right behind a queued AUDIT lost the DWG on
+        a VMware share, P2026-019) and then reads the ``.adt`` log AutoCAD
+        wrote beside the drawing ("Total errors found N fixed M", "Erased K
+        objects"). Without a fresh log (a never-saved drawing, an unwritable
+        folder) the counts stay ``None`` - unknown, never zero.
         ``AUDITCTL`` is restored afterwards; it is the user's setting, and
         leaving it at 1 silently makes AutoCAD write an ``.adt`` log beside
         every drawing they audit from then on.
@@ -7215,6 +7282,20 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
 
         def _sync():
             doc = _acad_doc()
+            if int(doc.GetVariable("CMDACTIVE")):
+                raise RuntimeError(
+                    "AutoCAD has an active command or prompt (CMDACTIVE); AUDIT was not "
+                    "started. Press ESC in AutoCAD and retry."
+                )
+            adt = None
+            before = None
+            try:
+                full = doc.FullName  # empty on a drawing that was never saved
+                if full:
+                    adt = Path(full).with_suffix(".adt")
+                    before = adt.stat().st_mtime if adt.exists() else None
+            except Exception:
+                log.debug("could not derive the .adt log path", exc_info=True)
             # AUDITCTL is a document sysvar (the Application has no
             # GetVariable / SetVariable). The read is optional only for a host
             # that does not expose the variable at all; then nothing is set
@@ -7226,8 +7307,10 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                 previous = None
             if previous is not None:
                 doc.SetVariable("AUDITCTL", 1)
+            completed = False
             try:
                 doc.SendCommand("_AUDIT Y\n")
+                completed = _wait_command_idle(doc, _audit_deadline_s())
             finally:
                 if previous is not None:
                     try:
@@ -7235,22 +7318,35 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                     except Exception:
                         log.debug("could not restore AUDITCTL on the document", exc_info=True)
 
-            # Only report a log we can actually see. SendCommand queues, so at
-            # this point AUDIT has very likely not run yet and the .adt does not
-            # exist — handing back a path to a missing file would be a small
-            # version of the same lie as claiming the repair count.
+            counts = None
             log_path = None
-            try:
-                full = doc.FullName  # empty on a drawing that was never saved
-                if full:
-                    candidate = Path(full).with_suffix(".adt")
-                    if candidate.exists():
-                        log_path = str(candidate)
-            except Exception:
-                log.debug("could not derive the .adt log path", exc_info=True)
-
+            if adt is not None and completed:
+                fresh = _fresh_file(adt, before)
+                if fresh:
+                    log_path = str(adt)
+                    counts = parse_audit_log(adt)
+            if counts is not None:
+                errors, fixed, erased = counts["error_count"], counts["fix_count"], counts["erased"]
+                return {
+                    "ok": True,
+                    "completed": True,
+                    "repaired": None if fixed is None else fixed > 0,
+                    "fixes": [],
+                    "fix_count": fixed,
+                    "errors": [],
+                    "error_count": errors,
+                    "erased_count": erased,
+                    "detail": "adt",
+                    "log_path": log_path,
+                    "message": (
+                        f"AUDIT finished: {errors} error(s) found, {fixed} fixed"
+                        + ("" if erased is None else f", {erased} object(s) erased")
+                        + ". Save to keep the repairs."
+                    ),
+                }
             return {
                 "ok": True,
+                "completed": completed,
                 "repaired": None,
                 "fixes": [],
                 "fix_count": None,
@@ -7259,12 +7355,10 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                 "detail": "unavailable",
                 "capability": "audit_detail",
                 "message": (
-                    "AUDIT was dispatched to AutoCAD with fixing enabled. SendCommand "
-                    "queues the command and returns immediately, so this call cannot "
-                    "confirm that it ran, let alone what it changed: the repair and "
-                    "error counts are unknown, not zero. AutoCAD writes an .adt log "
-                    "beside the drawing when AUDITCTL is on — that is the only place "
-                    "the detail exists."
+                    ("AUDIT finished" if completed else "AUDIT was still running at the deadline")
+                    + ", but AutoCAD wrote no readable .adt log (an unsaved drawing has none, "
+                    "or the folder is not writable), so the repair and error counts are "
+                    "unknown, not zero."
                 ),
                 "log_path": log_path,
             }

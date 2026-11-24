@@ -2463,9 +2463,11 @@ async def drawing_audit(ctx: Context = None) -> dict:
 
     This mutates the drawing. `fixes` lists repairs that have ALREADY been
     applied, so save afterwards to keep them; `errors` lists problems that could
-    not be repaired. On the live COM backend AutoCAD applies repairs but hands
-    back no counts, so they arrive as null with `detail: "unavailable"` rather
-    than as zero.
+    not be repaired. On the live COM backend the call waits until AUDIT has
+    finished (CMDACTIVE 0) and reads `error_count`, `fix_count` and
+    `erased_count` from the .adt log AutoCAD writes beside a saved drawing
+    (`detail: "adt"`); without a fresh log (an unsaved drawing) they arrive as
+    null with `detail: "unavailable"` rather than as zero.
     """
     await ctx.info("Auditing drawing")
     return await _backend(ctx).drawing_audit()

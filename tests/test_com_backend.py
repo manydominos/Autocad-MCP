@@ -1156,9 +1156,11 @@ async def test_drawing_audit_sets_auditctl_on_the_document_and_restores_it(sysva
     result = await backend.drawing_audit()
     assert result["ok"] is True and result["repaired"] is None
     assert doc.calls == [
+        ("GetVariable", "CMDACTIVE"),
         ("GetVariable", "AUDITCTL"),
         ("SetVariable", "AUDITCTL", 1),
         ("SendCommand", "_AUDIT Y\n", 1),
+        ("GetVariable", "CMDACTIVE"),  # fork: waits for AUDIT to finish
         ("SetVariable", "AUDITCTL", 0),
     ], "AUDIT runs with the log on and the operator's AUDITCTL comes back"
     assert doc.variables["AUDITCTL"] == 0

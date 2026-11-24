@@ -13155,10 +13155,10 @@ async def pointcloud_crop(
     inside: Annotated[bool, "Keep inside the outline"] = True,
     replace: Annotated[bool, "Remove earlier crops"] = True,
     vertex_space: Annotated[str, "wcs, native or raw_wcs"] = "wcs",
-    options: Annotated[dict | None, "Test knobs: plane_mode, method, close, zband_space"] = None,
+    options: Annotated[dict | None, "plane_mode, method, close, zband_space"] = None,
     ctx: Context = None,
 ) -> dict:
-    """Crop (WCS outline, stored native); returns `stored_crops`. Live only."""
+    """Crop to a WCS outline. Live only."""
     if plane not in ("top", "front", "side"):
         raise InvalidArgsError("invalid_args: plane is top, front or side")
     if vertex_space not in ("wcs", "native", "raw_wcs"):
@@ -13263,11 +13263,11 @@ async def pointcloud_section(
     normal: Annotated[list[float] | None, "Plane normal; default [0, 0, 1]"] = None,
     xdir: Annotated[list[float] | None, "In-plane X; default [1, 0, 0]"] = None,
     layer: Annotated[str, "Layer of the lines"] = "KONTROLA_OBLAK",
-    draw: Annotated[bool, "Draw the lines (default: diagnostics only)"] = False,
-    space: Annotated[str, "wcs or native origin"] = "wcs",
+    draw: Annotated[bool, "Draw lines"] = False,
+    space: Annotated[str, "wcs or native"] = "wcs",
     ctx: Context = None,
 ) -> dict:
-    """EXPERIMENTAL section lines through a plane: diagnostics, `draw` adds lines. Live only."""
+    """EXPERIMENTAL section through a plane. Live only."""
     if space not in ("wcs", "native"):
         raise InvalidArgsError("invalid_args: space is wcs or native")
     for name, value in (("origin", origin), ("normal", normal), ("xdir", xdir)):

@@ -195,7 +195,6 @@ class Settings:
         # did; a negative value reads as 0.
         self.com_snapshot_ttl: float = max(0.0, float(os.environ.get("COM_SNAPSHOT_TTL", "5")))
 
-
         # 1.8-05: how long a command sent to AutoCAD's command line (a raw
         # system_run_command, drawing_undo / drawing_redo, a corner op, the
         # transaction mark) may stay active before it is cancelled with ESC x3

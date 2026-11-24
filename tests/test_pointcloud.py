@@ -242,12 +242,12 @@ def recorder(monkeypatch):
 
 
 async def test_attach_payload_and_extension(recorder):
-    await server.pointcloud_attach("Z:/scan/Trg.rcs", scale=1000, layer="00_PCL", ctx=_Ctx())
+    await server.pointcloud_attach("Z:/scans/site.rcs", scale=1000, layer="00_PCL", ctx=_Ctx())
     op, payload = recorder[-1]
     assert op == "attach" and payload["insert"] == [0.0, 0.0, 0.0] and payload["scale"] == 1000.0
     assert payload["layer"] == "00_PCL"
     with pytest.raises(ToolError, match="rcs or .rcp"):
-        await server.pointcloud_attach("Z:/scan/Trg.e57", scale=1000, ctx=_Ctx())
+        await server.pointcloud_attach("Z:/scans/site.e57", scale=1000, ctx=_Ctx())
 
 
 async def test_crop_validation_and_payload(recorder):

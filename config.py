@@ -195,6 +195,14 @@ class Settings:
         # did; a negative value reads as 0.
         self.com_snapshot_ttl: float = max(0.0, float(os.environ.get("COM_SNAPSHOT_TTL", "5")))
 
+        # Fork (popravek/shranjevanje-mreza): how a DWG that already exists on
+        # a network share (UNC or a remote drive letter) is saved. "safe"
+        # (default): SaveAs to a side name, move the old file aside, SaveAs
+        # back - no rename of a file AutoCAD holds open. "direct": AutoCAD's
+        # own Save, as upstream.
+        mode = os.environ.get("NETWORK_SAVE_MODE", "safe").strip().lower()
+        self.network_save_mode: str = mode if mode in ("safe", "direct") else "safe"
+
         # 1.8-05: how long a command sent to AutoCAD's command line (a raw
         # system_run_command, drawing_undo / drawing_redo, a corner op, the
         # transaction mark) may stay active before it is cancelled with ESC x3

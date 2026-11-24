@@ -3137,6 +3137,64 @@ def _block_tail(block, top: int, space: str) -> tuple[list[tuple[int, str, Any, 
     return rows, count
 
 
+_DRIVE_REMOTE = 4
+
+
+def _is_network_path(path) -> bool:
+    """A UNC path or a drive letter Windows reports as remote (a mapped share)."""
+    text = str(path)
+    if text.startswith(("\\\\", "//")):
+        return True
+    if len(text) >= 2 and text[1] == ":" and sys.platform == "win32":
+        try:
+            import ctypes
+
+            kind = ctypes.windll.kernel32.GetDriveTypeW(f"{text[0]}:\\")
+            return int(kind) == _DRIVE_REMOTE
+        except Exception:
+            return False
+    return False
+
+
+_HEADER_RELEASE = {
+    "AC1015": "R2000",
+    "AC1018": "R2004",
+    "AC1021": "R2007",
+    "AC1024": "R2010",
+    "AC1027": "R2013",
+    "AC1032": "R2018",
+}
+
+
+def _dwg_release_of(path) -> str | None:
+    """The release of an existing DWG from its header, so a save keeps its format."""
+    try:
+        with open(path, "rb") as handle:
+            return _HEADER_RELEASE.get(handle.read(6).decode("ascii", errors="replace"))
+    except OSError:
+        return None
+
+
+def _save_files_state(target: Path) -> dict:
+    """What is on disk around ``target`` after a save - for the error and the result."""
+    part = target.with_name(f"{target.stem}.mcp-save{target.suffix}")
+    state = {
+        "dwg": target.exists(),
+        "bak": target.with_suffix(".bak").exists(),
+        "mcp_save": part.exists(),
+    }
+    try:
+        temps = sorted(
+            p.name
+            for pattern in ("atmp*.tmp", "save*.tmp")
+            for p in target.parent.glob(pattern)
+        )
+    except OSError:
+        temps = []
+    state["autocad_tmp"] = temps[:10]
+    return state
+
+
 def _owner_block(doc, space: str) -> tuple[Any, str]:
     """``(block, its space name)`` for ``space`` (``"Model"`` or a paper layout) in
     ``doc``; model space when the layout cannot be read. Never ``ActiveLayout``:
@@ -4436,18 +4494,105 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
             result["save_recovery"] = save_recovery
         return result
 
+    def _network_save_sync(self, doc, target: Path) -> dict:
+        """Save ``doc`` onto ``target`` on a network share without renaming an open file.
+
+        Fork (popravek/shranjevanje-mreza). On a VMware shared folder AutoCAD's
+        own ``Save`` over the open DWG (write ``atmp*.tmp``, rename the DWG to
+        ``.bak``, rename the tmp to ``.dwg``) failed twice (P2026-018/019): the
+        DWG was gone, a locked ``.bak`` and tmp files were left, and AutoCAD
+        could open nothing until restarted. ``SaveAs`` to a *new* name on the
+        same share always worked, so the save is done with that only:
+
+        1. ``SaveAs`` to ``<name>.mcp-save.dwg`` (the document moves there and
+           releases the original file);
+        2. the original, no longer open, becomes ``<name>.bak`` (``ISAVEBAK=1``,
+           AutoCAD's default) or is deleted (``ISAVEBAK=0``);
+        3. ``SaveAs`` onto the now free original name;
+        4. the ``.mcp-save`` copy is deleted.
+
+        A failure at any step leaves the drawing in at least one complete
+        file, and the error names the files (``files``).
+        """
+        code = self._DWG_SAVE_AS.get(_dwg_release_of(target) or "", self._DWG_SAVE_AS["R2018"])
+        part = target.with_name(f"{target.stem}.mcp-save{target.suffix}")
+        bak = target.with_suffix(".bak")
+        try:
+            keep_backup = bool(int(doc.GetVariable("ISAVEBAK")))
+        except Exception:
+            keep_backup = True
+        if part.exists():
+            os.remove(part)  # our own leftover from an earlier failed save
+        doc.SaveAs(str(part), code)
+        if not part.exists() or part.stat().st_size == 0:
+            raise RuntimeError(
+                f"network save: AutoCAD wrote no file at {part}; nothing else was touched. "
+                f"files: {_save_files_state(target)}"
+            )
+        if target.exists():
+            try:
+                if keep_backup:
+                    if bak.exists():
+                        os.remove(bak)
+                    os.replace(target, bak)
+                else:
+                    os.remove(target)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"network save: the drawing is saved in {part.name}, but the old "
+                    f"{target.name} could not be moved aside ({exc}); the document now "
+                    f"points to {part.name}. files: {_save_files_state(target)}"
+                ) from exc
+        try:
+            doc.SaveAs(str(target), code)
+        except Exception as exc:
+            raise RuntimeError(
+                f"network save: AutoCAD refused to write {target.name} ({exc}); the drawing "
+                f"is saved in {part.name} and the document points there. "
+                f"files: {_save_files_state(target)}"
+            ) from exc
+        if not target.exists():
+            raise RuntimeError(
+                f"network save: AutoCAD did not write {target.name}; the drawing is in "
+                f"{part.name}. files: {_save_files_state(target)}"
+            )
+        try:
+            os.remove(part)
+        except OSError:
+            log.debug("could not remove %s", part, exc_info=True)
+        return {"method": "network_safe", "files": _save_files_state(target)}
+
+    def _wants_network_save(self, doc, path: str | None) -> Path | None:
+        """The target when this save must take the network-safe route, else None."""
+        if config.settings.network_save_mode != "safe":
+            return None
+        try:
+            current = str(doc.FullName)
+        except Exception:
+            return None
+        target = path or current
+        if not target or Path(target).suffix.lower() != ".dwg" or not _is_network_path(target):
+            return None
+        if not Path(target).exists():
+            return None  # a new file: SaveAs to a new name is the route that works
+        return Path(target)
+
     async def drawing_save(self, path: str | None = None, overwrite_source: bool = False) -> dict:
         self._refuse_recovered_source("drawing_save", path, overwrite_source)
         source = (self._bound_entry() or {}).get("recovered_from")
 
         def _sync():
             doc = _acad_doc()
-            if path:
+            network = self._wants_network_save(doc, path)
+            extra = {}
+            if network is not None:
+                extra = self._network_save_sync(doc, network)
+            elif path:
                 doc.SaveAs(path)
             else:
                 doc.Save()
             self._rekey_bound_sync(doc)
-            return {"ok": True, "path": doc.FullName}, _dbmod_of(doc)
+            return {"ok": True, "path": doc.FullName, **extra}, _dbmod_of(doc)
 
         result, dbmod = await self._run(_sync)
         entry = self._bound_entry()
@@ -5146,7 +5291,14 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                     )
             # A clean or untitled document is never asked to save: Close(True)
             # on a clean file is a no-op write, on an untitled one a dialog.
-            doc.Close(bool(save and dirty and path))
+            # Fork: Close(True) is AutoCAD's own Save - on a network share the
+            # drawing is saved the network-safe way first, then closed clean.
+            network = self._wants_network_save(doc, None) if (save and dirty and path) else None
+            if network is not None:
+                self._network_save_sync(doc, network)
+                doc.Close(False)
+            else:
+                doc.Close(bool(save and dirty and path))
 
             def _read_after_close():
                 # AutoCAD still rejects calls for a moment after Close

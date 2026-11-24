@@ -120,7 +120,8 @@ async def test_crop_boundaries_are_read_only_from_a_cloud_open_for_write():
     readers = [m for m in methods if "getPointCloudCropping(" in m]
     assert readers, "the crop reader exists"
     for body in readers:
-        assert "OpenMode.ForWrite" in body and "OpenMode.ForRead" not in body, body[:120]
+        assert "OpenMode.ForWrite" in body or "OpenForWrite(" in body, body[:120]
+        assert "OpenMode.ForRead" not in body, body[:120]
         assert "tr.Abort()" in body or "tr.Commit()" in body
 
 
@@ -316,7 +317,7 @@ async def test_crop_validation_and_payload(recorder):
     square = [[0, 0], [10, 0], [10, 10], [0, 10]]
     await server.pointcloud_crop(square, zmin=950, zmax=1050, ctx=_Ctx())
     op, payload = recorder[-1]
-    assert op == "crop" and payload["zmin"] == 950 and payload["zband_mode"] == "elevation"
+    assert op == "crop" and payload["zmin"] == 950 and "zband_mode" not in payload
     for bad in (
         {"polygon": square[:2]},
         {"polygon": square, "plane": "iso"},
@@ -342,3 +343,33 @@ async def test_section_defaults_to_a_plan_cut(recorder):
     op, payload = recorder[-1]
     assert op == "section" and payload["normal"] == [0.0, 0.0, 1.0]
     assert payload["layer"] == "KONTROLA_OBLAK"
+    assert payload["draw"] is False, "0.1.2: diagnostics only unless draw=True"
+    assert payload["space"] == "wcs"
+
+
+async def test_crop_options_are_closed_test_knobs(recorder):
+    square = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    await server.pointcloud_crop(
+        square,
+        options={"plane_mode": "xy", "method": "new", "close": False, "zband_space": "native"},
+        ctx=_Ctx(),
+    )
+    payload = recorder[-1][1]
+    assert payload["plane_mode"] == "xy" and payload["method"] == "new"
+    assert payload["close"] is False and payload["zband_space"] == "native"
+    for bad in ({"plane_mode": "yz"}, {"colour": 1}, {"close": "yes"}):
+        with pytest.raises(ToolError, match="invalid_args"):
+            await server.pointcloud_crop(square, options=bad, ctx=_Ctx())
+    with pytest.raises(ToolError, match="invalid_args"):
+        await server.pointcloud_crop(square, vertex_space="ucs", ctx=_Ctx())
+
+
+async def test_the_add_in_source_matches_the_live_findings():
+    """0.1.2: crops stored in the cloud's native frame without a crop plane by
+    default, the height band on a fixed elevation range, section not drawn by default."""
+    source = (ROOT / "addin" / "McpPointCloud" / "McpPointCloud.cs").read_text(encoding="utf-8")
+    assert 'Str(r, "plane_mode", "none")' in source
+    assert 'Str(r, "vertex_space", "wcs")' in source and "CloudTransform(pc).Inverse()" in source
+    assert "ElevationApplyToFixedRange = true" in source
+    assert 'Bool(r, "draw", false)' in source
+    assert "PointCloudExtractor.AppendPolylineProfile(" not in source

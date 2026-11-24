@@ -29,7 +29,7 @@ namespace McpPointCloud
 {
     public class Api
     {
-        public const string Version = "0.1.1";
+        public const string Version = "0.1.2";
 
         [LispFunction("mcp-pc")]
         public object Dispatch(ResultBuffer args)
@@ -147,6 +147,16 @@ namespace McpPointCloud
             return d;
         }
 
+        // Crop (0.1.2). Live 2026-11-24 with 0.1.1: every crop hid all points
+        // (inside=true) or none (inside=false), with WCS mm and native m alike.
+        // Crops AutoCAD itself made on the same cloud read back as Polygonal,
+        // inside=true, vertices in NATIVE metres with z=0 and no usable plane.
+        // So by default the outline is converted to the cloud's native frame
+        // (inverse of Location, Rotation, Scale), z=0, closed, and no CropPlane is
+        // set (plane_mode "none"); an existing crop is edited in place
+        // (getPointCloudCropping is the API's "for editing" accessor) before a
+        // new one is made with PointCloudCrop.Create(IntPtr.Zero). Every variant is
+        // a parameter, and the answer carries what AutoCAD stored (read back).
         static Dictionary<string, object> Crop(Dictionary<string, object> r)
         {
             Document doc = AcApp.DocumentManager.MdiActiveDocument;
@@ -160,26 +170,23 @@ namespace McpPointCloud
             bool inside = Bool(r, "inside", true);
             bool inverted = Bool(r, "inverted", false);
             bool replace = Bool(r, "replace", true);
+            bool close = Bool(r, "close", true);
             string vertexSpace = Str(r, "vertex_space", "wcs");
+            string planeMode = Str(r, "plane_mode", "none");
+            string method = Str(r, "method", "auto");
             object zmin = Get(r, "zmin");
             object zmax = Get(r, "zmax");
-            string zmode = Str(r, "zband_mode", "elevation");
-            int count;
+            string zspace = Str(r, "zband_space", "wcs");
+            var diag = new Dictionary<string, object>();
             using (doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 PointCloudEx pc;
                 string lockedWhy = OpenForWrite(db, tr, id, out pc);
                 if (lockedWhy != null) return Fail("layer_locked", lockedWhy);
-                if (replace) pc.clearCropping();
-                Matrix3d toNative = Matrix3d.Identity;
-                if (vertexSpace == "native") toNative = CloudTransform(pc).Inverse();
-                Plane basePlane;
-                Vector3d normal;
-                if (plane == "front") { normal = Vector3d.YAxis; }
-                else if (plane == "side") { normal = Vector3d.XAxis; }
-                else { normal = Vector3d.ZAxis; }
-                basePlane = new Plane(Point3d.Origin, normal);
+                // WCS -> native: inverse of the cloud's own transform; "native" input
+                // is stored as given; "raw_wcs" stores WCS unconverted (0.1.1 behaviour).
+                Matrix3d toNative = vertexSpace == "wcs" ? CloudTransform(pc).Inverse() : Matrix3d.Identity;
                 var pts = new Point3dCollection();
                 foreach (double[] p in poly)
                 {
@@ -187,51 +194,89 @@ namespace McpPointCloud
                     if (plane == "front") w = new Point3d(p[0], 0, p[1]);
                     else if (plane == "side") w = new Point3d(0, p[0], p[1]);
                     else w = new Point3d(p[0], p[1], 0);
-                    pts.Add(w.TransformBy(toNative));
+                    Point3d n = w.TransformBy(toNative);
+                    if (plane == "top") n = new Point3d(n.X, n.Y, 0);
+                    pts.Add(n);
                 }
-                AddCrop(pc, pts, basePlane, inside, inverted);
+                if (close && pts.Count > 0 && pts[0].DistanceTo(pts[pts.Count - 1]) > 1e-9) pts.Add(pts[0]);
+                Vector3d normal = plane == "front" ? Vector3d.YAxis : plane == "side" ? Vector3d.XAxis : Vector3d.ZAxis;
+                int before = pc.getCroppingCount();
+                diag["crops_before"] = before;
+                string used;
+                if ((method == "auto" || method == "edit_existing") && replace && before > 0)
+                {
+                    while (pc.getCroppingCount() > 1) pc.removeLastCropping();
+                    PointCloudCrop c = pc.getPointCloudCropping(0);
+                    SetCrop(c, pts, planeMode, normal, inside, inverted, diag);
+                    used = "edit_existing";
+                }
+                else if (method == "edit_existing")
+                {
+                    return Fail("invalid_args", "method edit_existing needs an existing crop and replace=true");
+                }
+                else
+                {
+                    if (replace) pc.clearCropping();
+                    PointCloudCrop c = PointCloudCrop.Create(IntPtr.Zero);
+                    SetCrop(c, pts, planeMode, normal, inside, inverted, diag);
+                    pc.addCroppingBoundary(c);
+                    used = "new";
+                }
+                diag["method_used"] = used;
                 if (zmin != null && zmax != null && plane == "top")
                 {
                     double z0 = Convert.ToDouble(zmin), z1 = Convert.ToDouble(zmax);
-                    if (zmode == "crop")
-                    {
-                        // A crop is a prism along its plane normal: the Z band is a
-                        // second crop drawn in a vertical (XZ) plane over the polygon's X range.
-                        double x0 = double.MaxValue, x1 = double.MinValue;
-                        foreach (double[] p in poly) { x0 = Math.Min(x0, p[0]); x1 = Math.Max(x1, p[0]); }
-                        var band = new Point3dCollection();
-                        band.Add(new Point3d(x0, 0, z0).TransformBy(toNative));
-                        band.Add(new Point3d(x1, 0, z0).TransformBy(toNative));
-                        band.Add(new Point3d(x1, 0, z1).TransformBy(toNative));
-                        band.Add(new Point3d(x0, 0, z1).TransformBy(toNative));
-                        AddCrop(pc, band, new Plane(Point3d.Origin, Vector3d.YAxis), true, false);
-                    }
-                    else
-                    {
-                        pc.Stylization = PointCloudStylizationType.HeightRamp;
-                        pc.MinMaxElevation = Tuple.Create(z0, z1);
-                        pc.ElevationOutOfRangeBehavior = PointCloudDispOptionOutOfRange.HidePoints;
-                    }
+                    diag["zband"] = ApplyHeightBand(pc, z0, z1, zspace);
                 }
                 pc.ShowCropped = true;
-                count = pc.getCroppingCount();
+                diag["crops_after"] = pc.getCroppingCount();
                 tr.Commit();
             }
             var d = Ok();
-            d["crops"] = count;
+            d["diagnostics"] = diag;
+            d["stored_crops"] = CropDetails(db, id);
             d["cloud"] = Describe(db, id, false);
             return d;
         }
 
-        static void AddCrop(PointCloudEx pc, Point3dCollection pts, Plane plane, bool inside, bool inverted)
+        static void SetCrop(PointCloudCrop c, Point3dCollection pts, string planeMode, Vector3d normal,
+                            bool inside, bool inverted, Dictionary<string, object> diag)
         {
-            PointCloudCrop c = PointCloudCrop.Create(IntPtr.Zero);
             c.CropType = PointCloudCropType.Polygonal;
-            c.CropPlane = plane;
+            if (planeMode == "xy") c.CropPlane = new Plane(Point3d.Origin, normal);
             c.Vertices = pts;
             c.Inside = inside;
             c.Inverted = inverted;
-            pc.addCroppingBoundary(c);
+            diag["is_valid"] = Safe(delegate { return (object)c.IsValid(); });
+            var sent = new List<object>();
+            foreach (Point3d p in pts) sent.Add(P(p));
+            diag["vertices_sent"] = sent;
+        }
+
+        // Height band through elevation colouring: points outside [zmin, zmax]
+        // hidden. zband_space "wcs" converts WCS heights to the cloud's native
+        // frame ((z - Location.Z) / Scale); "native" passes them as given. The
+        // range is made fixed (ElevationApplyToFixedRange) - otherwise AutoCAD
+        // follows the limit box and ignores it. AutoCAD's own read-back is returned.
+        static Dictionary<string, object> ApplyHeightBand(PointCloudEx pc, double z0, double z1, string space)
+        {
+            var b = new Dictionary<string, object>();
+            double n0 = z0, n1 = z1;
+            if (space == "wcs")
+            {
+                double s = pc.Scale == 0 ? 1.0 : pc.Scale;
+                n0 = (z0 - pc.Location.Z) / s;
+                n1 = (z1 - pc.Location.Z) / s;
+            }
+            b["space"] = space;
+            b["sent"] = new[] { n0, n1 };
+            pc.Stylization = PointCloudStylizationType.HeightRamp;
+            b["fixed_range"] = Safe(delegate { pc.ElevationApplyToFixedRange = true; return (object)pc.ElevationApplyToFixedRange; });
+            pc.MinMaxElevation = Tuple.Create(Math.Min(n0, n1), Math.Max(n0, n1));
+            pc.ElevationOutOfRangeBehavior = PointCloudDispOptionOutOfRange.HidePoints;
+            b["stored"] = Safe(delegate { var t = pc.MinMaxElevation; return (object)new[] { t.Item1, t.Item2 }; });
+            b["native_extents"] = Safe(delegate { return (object)E(pc.NativeExtents); });
+            return b;
         }
 
         static Dictionary<string, object> CropClear(Dictionary<string, object> r)
@@ -267,6 +312,7 @@ namespace McpPointCloud
             ObjectId id;
             string why = Find(db, Str(r, "handle", null), out id);
             if (why != null) return Fail("not_found", why);
+            Dictionary<string, object> band = null;
             using (doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
@@ -287,7 +333,8 @@ namespace McpPointCloud
                 string scheme = Str(r, "color_scheme", null);
                 if (scheme != null) pc.CurrentColorScheme = scheme;
                 var el = Nums(r, "elevation");
-                if (el != null && el.Length == 2) pc.MinMaxElevation = Tuple.Create(el[0], el[1]);
+                if (el != null && el.Length == 2)
+                    band = ApplyHeightBand(pc, el[0], el[1], Str(r, "zband_space", "wcs"));
                 string oor = Str(r, "elevation_out_of_range", null);
                 if (oor != null) pc.ElevationOutOfRangeBehavior = OutOfRange(oor);
                 var it = Nums(r, "intensity");
@@ -303,10 +350,19 @@ namespace McpPointCloud
                 tr.Commit();
             }
             var d = Ok();
+            if (band != null) d["zband"] = band;
             d["cloud"] = Describe(db, id, false);
             return d;
         }
 
+        // Section (0.1.2, EXPERIMENTAL). Live 2026-11-24 with 0.1.1: 16 polylines
+        // 66-240 m long, far outside the building - AppendPolylineProfile placed
+        // the extracted curves somewhere we do not understand. Now nothing is drawn
+        // unless draw=true; the answer carries what Extract returned (curve count,
+        // 2D extents of the raw curves, the result's transform) so the parameter
+        // meaning can be settled live. space "wcs" passes origin/normal as given,
+        // "native" converts the origin into the cloud's native frame first. When
+        // drawn, each 2D curve is placed with the result's own transform.
         static Dictionary<string, object> Section(Dictionary<string, object> r)
         {
             Document doc = AcApp.DocumentManager.MdiActiveDocument;
@@ -322,41 +378,99 @@ namespace McpPointCloud
             Vector3d normal = Vec(r, "normal", Vector3d.ZAxis);
             Vector3d xdir = Vec(r, "xdir", Vector3d.XAxis);
             string layer = Str(r, "layer", "0");
+            string space = Str(r, "space", "wcs");
+            bool draw = Bool(r, "draw", false);
             var opt = new ExtractOption();
             if (Get(r, "fill_gap") != null) opt.FillGap = Num(r, "fill_gap", 0);
             if (Get(r, "snap_angle") != null) opt.SnapAngle = (uint)Num(r, "snap_angle", 0);
             if (Get(r, "min_segment") != null) opt.MiniumSegmentLength = Num(r, "min_segment", 0);
             if (Get(r, "lines_only") != null) opt.UseLineSegmentOnly = Bool(r, "lines_only", false);
             if (Get(r, "process_points") != null) opt.ProcessPoints = (uint)Num(r, "process_points", 0);
-            int created = 0;
+            var d = Ok();
+            d["experimental"] = true;
+            d["warning"] = "pointcloud_section is experimental: the meaning of PointCloudExtractor's arguments is not verified; check the diagnostics before trusting any line";
             var handles = new List<object>();
-            int curves = 0;
+            int created = 0;
             using (doc.LockDocument())
             {
                 PointCloudExtractResult res;
                 using (Transaction tr = db.TransactionManager.StartTransaction())
                 {
                     var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForRead);
-                    res = PointCloudExtractor.Extract(pc, normal, xdir, origin, opt, new Progress());
-                    EnsureLayer(db, tr, layer);
+                    Point3d o = origin;
+                    if (space == "native") o = origin.TransformBy(CloudTransform(pc).Inverse());
+                    d["origin_sent"] = P(o);
+                    d["normal_sent"] = V(normal);
+                    d["xdir_sent"] = V(xdir);
+                    res = PointCloudExtractor.Extract(pc, normal, xdir, o, opt, new Progress());
+                    if (draw) EnsureLayer(db, tr, layer);
                     tr.Commit();
                 }
                 if (res == null || res.Curves == null) return Fail("nothing_extracted", "the section returned no curves");
-                curves = res.Curves.Length;
-                ObjectId space = SymbolUtilityServices.GetBlockModelSpaceId(db);
-                var color = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
-                ObjectIdCollection ids;
-                if (Bool(r, "as_polyline", true))
-                    ids = PointCloudExtractor.AppendPolylineProfile(res, space, layer, color, Num(r, "polyline_param", 0.0));
-                else
-                    ids = PointCloudExtractor.AppendLineProfile(res, space, layer, color);
-                if (ids != null)
+                d["curves"] = res.Curves.Length;
+                d["transform"] = Safe(delegate { return (object)res.transform.ToArray(); });
+                double x0 = double.MaxValue, y0 = double.MaxValue, x1 = double.MinValue, y1 = double.MinValue;
+                double longest = 0;
+                foreach (ProfileCurve2d c in res.Curves)
                 {
-                    foreach (ObjectId e in ids) { created++; if (handles.Count < 200) handles.Add(e.Handle.ToString()); }
+                    try
+                    {
+                        Point2d a, b;
+                        if (c.IsArc) { a = c.Arc.StartPoint; b = c.Arc.EndPoint; }
+                        else { a = c.LineSeg.StartPoint; b = c.LineSeg.EndPoint; }
+                        foreach (Point2d q in new[] { a, b })
+                        {
+                            x0 = Math.Min(x0, q.X); y0 = Math.Min(y0, q.Y);
+                            x1 = Math.Max(x1, q.X); y1 = Math.Max(y1, q.Y);
+                        }
+                        longest = Math.Max(longest, a.GetDistanceTo(b));
+                    }
+                    catch (System.Exception) { }
+                }
+                if (res.Curves.Length > 0)
+                {
+                    d["raw_extents_2d"] = new[] { new[] { x0, y0 }, new[] { x1, y1 } };
+                    d["raw_longest_segment"] = longest;
+                }
+                if (draw)
+                {
+                    using (Transaction tr = db.TransactionManager.StartTransaction())
+                    {
+                        var ms = (BlockTableRecord)tr.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForWrite);
+                        Matrix3d m = res.transform;
+                        foreach (ProfileCurve2d c in res.Curves)
+                        {
+                            try
+                            {
+                                Entity e;
+                                if (c.IsArc)
+                                {
+                                    CircularArc2d a = c.Arc;
+                                    var p1 = new Point3d(a.StartPoint.X, a.StartPoint.Y, 0).TransformBy(m);
+                                    var p2 = new Point3d(a.EndPoint.X, a.EndPoint.Y, 0).TransformBy(m);
+                                    var mid = a.EvaluatePoint((a.StartAngle + a.EndAngle) / 2.0);
+                                    var p3 = new Point3d(mid.X, mid.Y, 0).TransformBy(m);
+                                    var arc3 = new CircularArc3d(p1, p3, p2);
+                                    e = Curve.CreateFromGeCurve(arc3);
+                                }
+                                else
+                                {
+                                    var s = c.LineSeg;
+                                    e = new Line(new Point3d(s.StartPoint.X, s.StartPoint.Y, 0).TransformBy(m),
+                                                 new Point3d(s.EndPoint.X, s.EndPoint.Y, 0).TransformBy(m));
+                                }
+                                e.Layer = layer;
+                                ms.AppendEntity(e);
+                                tr.AddNewlyCreatedDBObject(e, true);
+                                created++;
+                                if (handles.Count < 200) handles.Add(e.Handle.ToString());
+                            }
+                            catch (System.Exception) { }
+                        }
+                        tr.Commit();
+                    }
                 }
             }
-            var d = Ok();
-            d["curves"] = curves;
             d["created_count"] = created;
             d["handles"] = handles;
             d["layer"] = layer;

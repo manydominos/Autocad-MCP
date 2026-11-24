@@ -4703,6 +4703,103 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
 
         return await self._run(_sync)
 
+    # ── point clouds through the McpPointCloud add-in (fork) ────────────────
+
+    #: System variables pointcloud(style) may set besides the entity's own
+    #: properties: point size and level of detail of the point cloud display.
+    _POINTCLOUD_SYSVARS = {"point_size": "POINTCLOUDPOINTSIZE", "lod": "POINTCLOUDLOD"}
+
+    async def pointcloud(self, op: str, payload: dict) -> dict:
+        """Run one add-in operation; ``style`` also sets the display sysvars."""
+        from . import pointcloud as pc
+
+        payload = dict(payload or {})
+        sysvars = {}
+        if op == "style":
+            for key, name in self._POINTCLOUD_SYSVARS.items():
+                value = payload.pop(key, None)
+                if value is not None:
+                    sysvars[name] = int(value)
+        answer = await self._pc_call(op, payload)
+        if sysvars:
+
+            def _set():
+                doc = _acad_doc()
+                done = {}
+                for name, value in sysvars.items():
+                    try:
+                        _set_variable(doc, name, value)
+                        done[name] = value
+                    except Exception as exc:
+                        done[name] = f"not set: {exc}"
+                return done
+
+            answer["sysvars"] = await self._run(_set)
+        answer.setdefault("addin_version", pc.ADDIN_VERSION)
+        return answer
+
+    async def _pc_call(self, op: str, payload: dict) -> dict:
+        """Write the request, call (mcp-pc ...) through SendCommand, read the answer.
+
+        The add-in answers in a file, so the call does not depend on whether
+        ``SendCommand`` returns before or after the LISP function ran. No
+        answer while AutoCAD is idle means the add-in is not loaded: the
+        bundle is installed (``POINTCLOUD_ADDIN_AUTOINSTALL``) and the error
+        says how to trust it. ``POINTCLOUD_CALL_TIMEOUT`` (default 300 s)
+        bounds a long attach or section.
+        """
+        from fastmcp.exceptions import ToolError
+
+        from . import pointcloud as pc
+
+        request = pc.write_request(op, payload)
+        timeout = float(config.settings.pointcloud_call_timeout)
+
+        def _sync():
+            doc = _acad_doc()
+            if int(doc.GetVariable("CMDACTIVE")):
+                raise RuntimeError(
+                    "AutoCAD has an active command or prompt (CMDACTIVE); the point cloud "
+                    "call was not sent. Press ESC in AutoCAD and retry."
+                )
+            doc.SendCommand(pc.lisp_call(request) + "\n")
+            deadline = time.monotonic() + max(1.0, timeout - 2.0)
+            idle_since = None
+            while True:
+                answer = pc.read_answer(request)
+                if answer is not None:
+                    return answer
+                try:
+                    active = int(doc.GetVariable("CMDACTIVE"))
+                except Exception:
+                    active = 0
+                now = time.monotonic()
+                if not active:
+                    idle_since = idle_since or now
+                    if now - idle_since > 2.0:
+                        return None  # AutoCAD is idle and nobody answered
+                else:
+                    idle_since = None
+                if now > deadline:
+                    return {"ok": False, "kind": "timeout", "error": f"no answer in {timeout:.0f}s"}
+                time.sleep(0.05)
+
+        try:
+            answer = await self._run_timed(timeout, "POINTCLOUD_CALL_TIMEOUT", _sync)
+        finally:
+            pc.cleanup(request)
+        if answer is None:
+            install = None
+            if config.settings.pointcloud_addin_autoinstall:
+                try:
+                    install = pc.install_bundle()
+                except Exception as exc:  # the error below still explains the route
+                    install = {"installed": False, "reason": f"copy_failed: {exc}"}
+            raise ToolError(str(pc.not_loaded_error(install)))
+        if not answer.get("ok"):
+            raise ToolError(f"{answer.get('kind', 'pointcloud_failed')}: {answer.get('error')}")
+        return answer
+
     async def drawing_export_dwg(self, path, version="R2018") -> dict:
         from backends.contracts.refs import DWG_VERSIONS
 

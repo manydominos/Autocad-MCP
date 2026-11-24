@@ -88,6 +88,21 @@ class RefsContract(ABC):
         """
         ...
 
+    async def pointcloud(self, op: str, payload: dict) -> dict:
+        """One point cloud operation (fork: attach, info, crop, crop_clear, style, section).
+
+        Live only: an RCS/RCP point cloud is attached, cropped and drawn by
+        AutoCAD itself, through the McpPointCloud .NET add-in
+        (``backends/pointcloud.py``). The default refuses by capability.
+        """
+        from backends.capability import UnsupportedCapabilityError
+
+        raise UnsupportedCapabilityError(
+            "pointcloud",
+            "point clouds (RCS/RCP) need live AutoCAD with the McpPointCloud add-in; "
+            "this backend cannot attach or crop one. Read an E57 in Python instead.",
+        )
+
     @abstractmethod
     async def drawing_export_dwg(self, path: str, version: str) -> dict:
         """Write the current drawing as a real DWG.

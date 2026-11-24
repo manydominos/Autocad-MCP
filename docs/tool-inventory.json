@@ -3,7 +3,7 @@
   "schema_version": 2,
   "package_version": "1.8.0",
   "totals": {
-    "tools": 259,
+    "tools": 265,
     "resources": 13,
     "prompts": 5,
     "groups": 28
@@ -36,7 +36,7 @@
     "transactions": 7,
     "understanding": 5,
     "validation": 1,
-    "view": 4
+    "view": 10
   },
   "tools": [
     {
@@ -4923,6 +4923,130 @@
       "annotations": {
         "title": "Point: Tangent from external point",
         "readOnlyHint": true
+      }
+    },
+    {
+      "name": "pointcloud_attach",
+      "group": "view",
+      "cost": "mutate",
+      "summary": "Attach an RCS/RCP point cloud without prompts.",
+      "acad": [
+        "POINTCLOUDATTACH"
+      ],
+      "synonyms": [
+        "attach rcs",
+        "attach rcp",
+        "insert a point cloud",
+        "load a laser scan"
+      ],
+      "tags": [
+        "view"
+      ],
+      "annotations": {
+        "title": "Point Cloud: Attach",
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "pointcloud_crop",
+      "group": "view",
+      "cost": "mutate",
+      "summary": "Crop a point cloud to an outline and a height band.",
+      "acad": [
+        "POINTCLOUDCROP"
+      ],
+      "synonyms": [
+        "crop the point cloud",
+        "slice of the scan",
+        "height band",
+        "clip the cloud"
+      ],
+      "tags": [
+        "view"
+      ],
+      "annotations": {
+        "title": "Point Cloud: Crop",
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "pointcloud_crop_clear",
+      "group": "view",
+      "cost": "mutate",
+      "summary": "Remove every crop of a point cloud.",
+      "acad": [],
+      "synonyms": [
+        "remove point cloud crop",
+        "show the whole cloud",
+        "uncrop"
+      ],
+      "tags": [
+        "view"
+      ],
+      "annotations": {
+        "title": "Point Cloud: Clear Crop",
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "pointcloud_info",
+      "group": "view",
+      "cost": "read",
+      "summary": "Read attached point clouds: file, transform, extents, scans, crops.",
+      "acad": [],
+      "synonyms": [
+        "point cloud extents",
+        "which scans",
+        "point cloud path",
+        "scan positions"
+      ],
+      "tags": [
+        "view"
+      ],
+      "annotations": {
+        "title": "Point Cloud: Info",
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "pointcloud_section",
+      "group": "view",
+      "cost": "mutate",
+      "summary": "Let AutoCAD extract a section of a point cloud as lines.",
+      "acad": [],
+      "synonyms": [
+        "section lines from the cloud",
+        "extract a profile",
+        "cut the scan into lines"
+      ],
+      "tags": [
+        "view"
+      ],
+      "annotations": {
+        "title": "Point Cloud: Section Lines",
+        "destructiveHint": false
+      }
+    },
+    {
+      "name": "pointcloud_style",
+      "group": "view",
+      "cost": "mutate",
+      "summary": "Colour and density of a point cloud's display.",
+      "acad": [
+        "POINTCLOUDSTYLIZE"
+      ],
+      "synonyms": [
+        "point cloud colour",
+        "colour by height",
+        "intensity colours",
+        "point size"
+      ],
+      "tags": [
+        "view"
+      ],
+      "annotations": {
+        "title": "Point Cloud: Style",
+        "destructiveHint": false
       }
     },
     {

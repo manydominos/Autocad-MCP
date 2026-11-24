@@ -1763,6 +1763,27 @@ TOOL_ALIASES: dict[str, ToolAliases] = {
         acad=("ZOOM",),
         synonyms=("zoom to fit", "fit the drawing on screen", "see everything"),
     ),
+    "pointcloud_attach": ToolAliases(
+        acad=("POINTCLOUDATTACH",),
+        synonyms=("attach rcs", "attach rcp", "insert a point cloud", "load a laser scan"),
+    ),
+    "pointcloud_info": ToolAliases(
+        synonyms=("point cloud extents", "which scans", "point cloud path", "scan positions"),
+    ),
+    "pointcloud_crop": ToolAliases(
+        acad=("POINTCLOUDCROP",),
+        synonyms=("crop the point cloud", "slice of the scan", "height band", "clip the cloud"),
+    ),
+    "pointcloud_crop_clear": ToolAliases(
+        synonyms=("remove point cloud crop", "show the whole cloud", "uncrop"),
+    ),
+    "pointcloud_style": ToolAliases(
+        acad=("POINTCLOUDSTYLIZE",),
+        synonyms=("point cloud colour", "colour by height", "intensity colours", "point size"),
+    ),
+    "pointcloud_section": ToolAliases(
+        synonyms=("section lines from the cloud", "extract a profile", "cut the scan into lines"),
+    ),
     "view_zoom_window": ToolAliases(
         acad=("ZOOM",),
         synonyms=("zoom into a region", "close up of an area", "magnify a rectangle"),

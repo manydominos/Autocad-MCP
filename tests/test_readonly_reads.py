@@ -37,6 +37,7 @@ NO_DOCUMENT_READ = {
     "system_variable_describe": "the static SYSVAR_CATALOG",
     "system_preferences_get": "live-only (capability preferences)",
     "user_pick_point": "live-only (capability interactive_prompt)",
+    "pointcloud_info": "live-only (capability pointcloud): the McpPointCloud add-in reads it",
     "user_select": "live-only (capability interactive_prompt)",
     "template_list": "the bundled layer templates",
     "drawing_template_list": "the bundled drawing templates",

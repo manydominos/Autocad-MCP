@@ -13063,11 +13063,11 @@ async def pointcloud_attach(
 )
 async def pointcloud_info(
     cloud: Annotated[str, "Point cloud handle (hex); empty = all"] = "",
-    items: Annotated[bool, "List scans and regions"] = True,
+    items: Annotated[bool, "Also crops, points, scans, regions"] = False,
     ctx: Context = None,
 ) -> dict:
-    """Attached point clouds: path, transform, extents, points, crops, style; scans
-    with origins (RCP only). Live only."""
+    """Attached point clouds: handle, layer, path, file_found, transform, crop count;
+    extents when the file is found; `items` adds the details. Live only."""
     payload = {"handle": _pc_handle(cloud), "items": bool(items)}
     return await _backend(ctx).pointcloud("info", payload)
 

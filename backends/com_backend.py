@@ -4720,6 +4720,8 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                 value = payload.pop(key, None)
                 if value is not None:
                     sysvars[name] = int(value)
+        if op != "ping" and getattr(self, "_pc_version_ok", None) != pc.ADDIN_VERSION:
+            await self._pc_require_version()
         answer = await self._pc_call(op, payload)
         if sysvars:
 
@@ -4737,6 +4739,37 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
             answer["sysvars"] = await self._run(_set)
         answer.setdefault("addin_version", pc.ADDIN_VERSION)
         return answer
+
+    async def _pc_require_version(self) -> None:
+        """Run nothing against an add-in older than this server (0.1.0 crashed AutoCAD).
+
+        One ``ping`` per backend: the loaded add-in's version must be
+        ``ADDIN_VERSION``. An older one is replaced in the autoloader folder
+        (the loaded DLL is renamed aside, the new one copied beside it) and
+        the call is refused with ``addin_outdated``: AutoCAD loads the new
+        DLL at its next start.
+        """
+        from fastmcp.exceptions import ToolError
+
+        from . import pointcloud as pc
+
+        pong = await self._pc_call("ping", {})
+        loaded = pong.get("version")
+        if loaded == pc.ADDIN_VERSION:
+            self._pc_version_ok = loaded
+            return
+        install = None
+        if config.settings.pointcloud_addin_autoinstall:
+            try:
+                install = pc.install_bundle()
+            except Exception as exc:  # the refusal below still stands
+                install = {"installed": False, "reason": f"copy_failed: {exc}"}
+        raise ToolError(
+            f"addin_outdated: AutoCAD has McpPointCloud {loaded}, this server needs "
+            f"{pc.ADDIN_VERSION}; nothing was run. Bundle: "
+            f"{(install or {}).get('reason', 'not installed (autoinstall off)')}. "
+            "Save your work, close AutoCAD and start it again to load the new add-in."
+        )
 
     async def _pc_call(self, op: str, payload: dict) -> dict:
         """Write the request, call (mcp-pc ...) through SendCommand, read the answer.

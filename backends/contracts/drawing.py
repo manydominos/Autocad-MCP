@@ -35,7 +35,11 @@ class DrawingContract(ABC):
         ``overwrite_source=True`` (``recovered_source_protected`` otherwise)."""
 
     @abstractmethod
-    async def drawing_save_as(self, path: str, fmt: str = "dwg") -> dict: ...
+    async def drawing_save_as(
+        self, path: str, fmt: str = "dwg", version: str | None = None
+    ) -> dict:
+        """Save to ``path`` and re-point the document. ``version`` is the DWG
+        release (``DWG_VERSIONS``, default R2018); refused for DXF/DWT."""
 
     @abstractmethod
     async def drawing_export_dxf(self, path: str) -> dict:

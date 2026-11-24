@@ -57,6 +57,7 @@ from engineering.errors import (
     ERROR_KINDS,
     CommandRefusedError,
     GateFailure,
+    InvalidArgsError,
     annotate,
     capability_of,
     cause_chain,
@@ -7015,7 +7016,7 @@ async def validation_check(
 
 
 # ---------------------------------------------------------------------------
-# ── SECTION 9: View & Screenshot (4 tools) ──────────────────────────────────
+# ── SECTION 9: View & Screenshot (5 tools) ──────────────────────────────────
 # ---------------------------------------------------------------------------
 
 
@@ -7137,6 +7138,61 @@ def _view_image_result(report: dict, unavailable: str) -> ToolResult:
         ],
         structured_content=payload,
     )
+
+
+@cad_tool(
+    summary="Photograph the live AutoCAD view (point clouds too) with its drawing scale.",
+    cost="read",
+)
+@mcp.tool(
+    annotations={"title": "Capture View", "readOnlyHint": True},
+    tags={"view", "screenshot"},
+)
+async def view_capture(
+    window: Annotated[
+        list[float] | None,
+        "Optional [x0, y0, x1, y1] in WCS to zoom to first; omitted = the current view",
+    ] = None,
+    path: Annotated[
+        str | None,
+        "Optional .png path to write; the report is written beside it as <path>.json",
+    ] = None,
+    max_px: Annotated[
+        int,
+        Field(description="Long side of the image in pixels (64-4096).", ge=64, le=4096),
+    ] = 2048,
+    hide_ui: Annotated[
+        bool, "Hide ViewCube, navigation bar, UCS icon and grid for the shot (restored after)"
+    ] = True,
+    settle_s: Annotated[
+        float,
+        Field(
+            description="Seconds to wait before the shot (a point cloud draws progressively), 0-30.",
+            ge=0,
+            le=30,
+        ),
+    ] = 1.0,
+    ctx: Context = None,
+):
+    """Capture AutoCAD's drawing view as AutoCAD draws it, with a known scale.
+
+    Unlike `view_render` (which draws an exported DXF and so misses what only
+    AutoCAD draws - an attached RCS/RCP point cloud, rasters, OLE), this
+    photographs the view window itself, without the ribbon and frame, and
+    states `px_per_unit` and `world_window` [x0, y0, x1, y1] so a pixel maps to
+    a WCS point (only in a plan view of the world UCS; otherwise both are null
+    with a `note`). `window` zooms first. `path` writes the PNG and a JSON
+    report beside it. Live (COM) only; headless refuses by capability.
+    """
+    shot = None
+    if path:
+        shot = str(validate_path(path, allow_write=True, kinds=KINDS_IMAGE))
+    if window is not None and len(window) != 4:
+        raise InvalidArgsError("invalid_args: view_capture window needs four numbers [x0, y0, x1, y1]")
+    report = await _backend(ctx).view_capture(
+        window=window, path=shot, max_px=max_px, hide_ui=hide_ui, settle_s=settle_s
+    )
+    return _view_image_result(report, "View capture unavailable.")
 
 
 @cad_tool(

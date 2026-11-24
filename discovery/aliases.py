@@ -1763,6 +1763,15 @@ TOOL_ALIASES: dict[str, ToolAliases] = {
         acad=("ZOOM",),
         synonyms=("zoom to fit", "fit the drawing on screen", "see everything"),
     ),
+    "view_capture": ToolAliases(
+        acad=("PNGOUT",),
+        synonyms=(
+            "screenshot of the point cloud",
+            "picture with scale",
+            "save view as png",
+            "image of the drawing over the scan",
+        ),
+    ),
     "view_zoom_window": ToolAliases(
         acad=("ZOOM",),
         synonyms=("zoom into a region", "close up of an area", "magnify a rectangle"),

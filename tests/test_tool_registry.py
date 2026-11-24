@@ -665,6 +665,6 @@ async def test_tool_group_sizes_are_unchanged():
         "transactions": 7,
         "understanding": 5,
         "validation": 1,
-        "view": 4,
+        "view": 5,  # + view_capture (agent mcp, popravek/view-capture)
     }
-    assert sum(sizes.values()) == 259
+    assert sum(sizes.values()) == 260

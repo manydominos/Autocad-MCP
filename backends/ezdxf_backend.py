@@ -9753,7 +9753,7 @@ class EzdxfBackend(EzdxfCheckpoints, EzdxfChangeSets, AutoCADBackend):
 
         return await self._async(_sync)
 
-    async def system_run_command(self, command) -> dict:
+    async def system_run_command(self, command, check_command: bool = True) -> dict:
         return {
             "ok": False,
             "error": "system_run_command not supported in ezdxf backend (no live AutoCAD)",

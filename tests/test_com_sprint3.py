@@ -118,7 +118,7 @@ async def test_run_command_reads_cmdactive_on_the_document(monkeypatch):
     monkeypatch.setattr(cb, "_acad_doc", lambda: doc)
 
     b = _backend_no_executor()
-    out = await b.system_run_command("_ZOOM E")
+    out = await b.system_run_command("_ZOOM E", check_command=False)
     # 1.8-05: the command is waited on and its report says it completed.
     assert out["ok"] is True and out["command"] == "_ZOOM E" and out["completed"] is True
     assert doc.sent == ["_ZOOM E\n"]

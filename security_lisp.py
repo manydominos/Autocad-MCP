@@ -216,6 +216,8 @@ READ_FUNCTIONS: frozenset[str] = frozenset(
         "tblnext",
         "tblobjname",
         "getvar",
+        # fork (popravek/ukaz-esc): is a command name known - no side effect
+        "getcname",
         "dictsearch",
         "dictnext",
         "namedobjdict",
@@ -289,7 +291,9 @@ NEVER_PREFIXES: dict[str, str] = {
 }
 
 #: ``get*`` functions that do not prompt (every other ``get*`` does).
-GET_NOT_INTERACTIVE: frozenset[str] = frozenset({"getvar", "getenv", "getcfg", "getpropertyvalue"})
+GET_NOT_INTERACTIVE: frozenset[str] = frozenset(
+    {"getvar", "getenv", "getcfg", "getpropertyvalue", "getcname"}
+)
 
 #: The write tier (1.8.1), by exact name.
 WRITE_FUNCTIONS: frozenset[str] = frozenset(

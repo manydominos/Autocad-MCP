@@ -7749,6 +7749,11 @@ async def drawing_settings(
 )
 async def system_run_command(
     command: Annotated[str, "AutoCAD command string (e.g. '_ZOOM E', '_REGEN', '_EXPLODE')"],
+    check_command: Annotated[
+        bool,
+        "Check the first command name with (getcname) before sending and refuse an "
+        "unknown one (default true). false for a PGP alias.",
+    ] = True,
     ctx: Context = None,
 ) -> dict:
     """Execute an AutoCAD command string directly (COM backend only).
@@ -7778,6 +7783,14 @@ async def system_run_command(
     sheet) adds `warning: "created_outside_target_space"`. A command still at a
     prompt is cancelled with ESC x3 and fails with kind `command_incomplete`
     carrying AutoCAD's own `last_prompt`.
+
+    The first command name is checked before anything is sent (`check_command`):
+    an unknown one is refused with `unknown_command` and nothing runs (the rest
+    of the string is never executed as other commands). A command that stops at
+    a prompt and blocks AutoCAD is answered with ESC x3 through Win32 after
+    `COMMAND_ESCAPE_AFTER_S` (default COM_CALL_TIMEOUT - 2 s) and ends as
+    `command_incomplete`; no ESC in AutoCAD by hand is needed. Give every answer
+    a command asks for in the string, or use a typed tool.
     """
     try:
         sanitize_command(command)
@@ -7785,7 +7798,11 @@ async def system_run_command(
         exc.alternatives = await _command_alternatives(exc.verbs)
         raise
     await ctx.warning(f"Running command: {command}")
-    result = await _backend(ctx).system_run_command(command)
+    backend = _backend(ctx)
+    if check_command:
+        result = await backend.system_run_command(command)
+    else:
+        result = await backend.system_run_command(command, check_command=False)
     typed = await _command_alternatives(command_verbs(command))
     if typed and isinstance(result, dict):
         result = {**result, "typed_alternative": typed}

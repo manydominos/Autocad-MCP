@@ -3,7 +3,7 @@
   "schema_version": 2,
   "package_version": "1.8.0",
   "totals": {
-    "tools": 259,
+    "tools": 260,
     "resources": 13,
     "prompts": 5,
     "groups": 28
@@ -36,7 +36,7 @@
     "transactions": 7,
     "understanding": 5,
     "validation": 1,
-    "view": 4
+    "view": 5
   },
   "tools": [
     {
@@ -6066,6 +6066,29 @@
       ],
       "annotations": {
         "title": "Validate Drawing",
+        "readOnlyHint": true
+      }
+    },
+    {
+      "name": "view_capture",
+      "group": "view",
+      "cost": "read",
+      "summary": "Photograph the live AutoCAD view (point clouds too) with its drawing scale.",
+      "acad": [
+        "PNGOUT"
+      ],
+      "synonyms": [
+        "screenshot of the point cloud",
+        "picture with scale",
+        "save view as png",
+        "image of the drawing over the scan"
+      ],
+      "tags": [
+        "screenshot",
+        "view"
+      ],
+      "annotations": {
+        "title": "Capture View",
         "readOnlyHint": true
       }
     },

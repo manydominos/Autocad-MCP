@@ -42,6 +42,28 @@ class ViewContract(ABC):
         """
         ...
 
+    async def view_capture(
+        self,
+        window: list[float] | None = None,
+        path: str | None = None,
+        max_px: int = 2048,
+        hide_ui: bool = True,
+        settle_s: float = 1.0,
+    ) -> dict:
+        """The live view as AutoCAD draws it, with its drawing scale (fork).
+
+        Returns ``{"png", "px", "px_per_unit", "world_window", "view_center",
+        "view_height", "screen_px", "plan_view", "path"?}``. Only a live
+        engine has a view to capture; the default refuses by capability.
+        """
+        from backends.capability import UnsupportedCapabilityError
+
+        raise UnsupportedCapabilityError(
+            "view_capture",
+            "view_capture photographs the live AutoCAD view (point clouds, rasters); "
+            "this backend has none. Use view_render(region=[x0, y0, x1, y1]).",
+        )
+
     @abstractmethod
     async def view_render(
         self,

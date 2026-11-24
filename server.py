@@ -7031,7 +7031,7 @@ async def validation_check(
 
 
 # ---------------------------------------------------------------------------
-# ── SECTION 9: View & Screenshot (4 tools) ──────────────────────────────────
+# ── SECTION 9: View & Screenshot (5 tools) ──────────────────────────────────
 # ---------------------------------------------------------------------------
 
 
@@ -7153,6 +7153,35 @@ def _view_image_result(report: dict, unavailable: str) -> ToolResult:
         ],
         structured_content=payload,
     )
+
+
+@cad_tool(
+    summary="Photograph the live AutoCAD view (point clouds too) with its drawing scale.",
+    cost="read",
+)
+@mcp.tool(
+    annotations={"title": "Capture View", "readOnlyHint": True},
+    tags={"view", "screenshot"},
+)
+async def view_capture(
+    window: Annotated[list[float] | None, "Zoom first to [x0, y0, x1, y1] (WCS)"] = None,
+    path: Annotated[str | None, "Write the PNG here (+ <path>.json)"] = None,
+    max_px: Annotated[int, Field(description="Long side, 64-4096 px.", ge=64, le=4096)] = 2048,
+    hide_ui: Annotated[bool, "Hide ViewCube, nav bar, UCS icon, grid"] = True,
+    settle_s: Annotated[float, Field(description="Wait before the shot, s.", ge=0, le=30)] = 1.0,
+    ctx: Context = None,
+):
+    """The view window as AutoCAD draws it (point clouds too, unlike view_render),
+    with `px_per_unit` and `world_window` in a plan view of the world UCS. Live only."""
+    shot = None
+    if path:
+        shot = str(validate_path(path, allow_write=True, kinds=KINDS_IMAGE))
+    if window is not None and len(window) != 4:
+        raise InvalidArgsError("invalid_args: view_capture window needs four numbers [x0, y0, x1, y1]")
+    report = await _backend(ctx).view_capture(
+        window=window, path=shot, max_px=max_px, hide_ui=hide_ui, settle_s=settle_s
+    )
+    return _view_image_result(report, "View capture unavailable.")
 
 
 @cad_tool(

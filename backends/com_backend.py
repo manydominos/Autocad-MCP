@@ -2779,6 +2779,141 @@ def _layer_info(layer, current_layer_name: str) -> LayerInfo:
 # ---------------------------------------------------------------------------
 
 
+#: System variables ``view_capture`` sets to 0 for the shot and restores:
+#: ViewCube, navigation bar, UCS icon, grid.
+_CAPTURE_HIDDEN_UI = ("NAVVCUBEDISPLAY", "NAVBARDISPLAY", "UCSICON", "GRIDMODE")
+
+
+def _view_frame(doc) -> dict:
+    """What the current view shows: centre, height in units, pixels, plan or not."""
+
+    def _var(name):
+        try:
+            return doc.GetVariable(name)
+        except Exception:
+            return None
+
+    centre = _var("VIEWCTR")
+    view_size = _var("VIEWSIZE")
+    screen = _var("SCREENSIZE")
+    direction = _var("VIEWDIR")
+    world_ucs = _var("WORLDUCS")
+    twist = _var("VIEWTWIST")
+    plan = (
+        direction is not None
+        and abs(float(direction[0])) < 1e-9
+        and abs(float(direction[1])) < 1e-9
+        and float(direction[2]) > 0
+        and (twist is None or abs(float(twist)) < 1e-9)
+    )
+    return {
+        "view_center": None if centre is None else [float(centre[0]), float(centre[1])],
+        "view_height": None if view_size is None else float(view_size),
+        "screen_px": None if screen is None else [int(round(screen[0])), int(round(screen[1]))],
+        "plan_view": bool(plan),
+        "world_ucs": None if world_ucs is None else bool(int(world_ucs)),
+    }
+
+
+def capture_report(frame: dict, px: tuple[int, int], factor: float = 1.0) -> dict:
+    """The scale and world window of a view capture of ``px`` pixels.
+
+    ``px_per_unit`` = captured height / ``VIEWSIZE`` (times the downscale
+    ``factor``); the world window is centred on ``VIEWCTR`` with the image's
+    aspect. Both are ``None`` unless the view is a plan view in the world UCS
+    and the captured size matches ``SCREENSIZE`` - a wrong scale is worse
+    than none.
+    """
+    width, height = px
+    report = {
+        "applied": True,
+        "px": [width, height],
+        "view_center": frame.get("view_center"),
+        "view_height": frame.get("view_height"),
+        "screen_px": frame.get("screen_px"),
+        "plan_view": frame.get("plan_view"),
+        "world_ucs": frame.get("world_ucs"),
+        "px_per_unit": None,
+        "world_window": None,
+    }
+    screen = frame.get("screen_px")
+    centre = frame.get("view_center")
+    view_height = frame.get("view_height")
+    native = (round(width / factor), round(height / factor)) if factor else (width, height)
+    matches = bool(screen) and abs(native[0] - screen[0]) <= 2 and abs(native[1] - screen[1]) <= 2
+    usable = (
+        matches
+        and centre is not None
+        and view_height
+        and frame.get("plan_view")
+        and frame.get("world_ucs") is not False
+    )
+    if usable:
+        per_unit = height / float(view_height)
+        half_w = width / per_unit / 2.0
+        half_h = height / per_unit / 2.0
+        report["px_per_unit"] = per_unit
+        report["world_window"] = [
+            centre[0] - half_w,
+            centre[1] - half_h,
+            centre[0] + half_w,
+            centre[1] + half_h,
+        ]
+    else:
+        report["note"] = (
+            "no scale: the view is not a plan view in the world UCS, or the captured "
+            "window does not match SCREENSIZE"
+        )
+    return report
+
+
+def _write_capture(path: str, png: bytes, report: dict) -> str:
+    """Write the PNG (via a side file, then replace) and ``<path>.json`` beside it."""
+    import json as _json
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_name(target.name + ".part")
+    part.write_bytes(png)
+    os.replace(part, target)
+    sidecar = target.with_name(target.name + ".json")
+    meta = {k: v for k, v in report.items() if k != "png"}
+    meta["path"] = str(target)
+    sidecar.write_text(_json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(target)
+
+
+def _find_view_hwnd(main_hwnd: int, screen_px) -> int | None:
+    """The child window of AutoCAD's frame that is the drawing view.
+
+    Matched by client size against ``SCREENSIZE`` (the current viewport in
+    pixels); the last match in Z order wins (the active MDI child is drawn
+    on top). ``None`` when no child matches.
+    """
+    if not _WIN32_AVAILABLE or not screen_px:
+        return None
+    want_w, want_h = int(screen_px[0]), int(screen_px[1])
+    found: list[int] = []
+
+    def _cb(hwnd, _):
+        try:
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            left, top, right, bottom = win32gui.GetClientRect(hwnd)
+            if abs((right - left) - want_w) <= 2 and abs((bottom - top) - want_h) <= 2:
+                found.append(int(hwnd))
+        except Exception:
+            pass
+        return True
+
+    try:
+        _ensure_dpi_aware()
+        win32gui.EnumChildWindows(main_hwnd, _cb, None)
+    except Exception as exc:
+        log.debug("EnumChildWindows failed: %s", exc)
+    return found[-1] if found else None
+
+
 def _find_autocad_hwnd() -> int | None:
     """Find the main AutoCAD window handle."""
     if not _WIN32_AVAILABLE:
@@ -10267,6 +10402,85 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
             return {"ok": True}
 
         return await self._run(_sync)
+
+    async def view_capture(
+        self,
+        window: list[float] | None = None,
+        path: str | None = None,
+        max_px: int = 2048,
+        hide_ui: bool = True,
+        settle_s: float = 1.0,
+    ) -> dict:
+        """The drawing area of AutoCAD as it is drawn - point clouds, rasters
+        and all - with the drawing coordinates of its pixels (fork, popravek/view-capture).
+
+        ``view_render`` with a region draws an exported DXF snapshot, so what
+        AutoCAD alone draws (an attached RCS/RCP point cloud, OLE, shading)
+        is missing; a window capture had the frame and ribbon in it and no
+        scale. This zooms to ``window`` (WCS, plan view), hides the ViewCube,
+        navigation bar, UCS icon and grid for the shot, waits ``settle_s``
+        (a point cloud is drawn progressively), captures only the view
+        window and states ``px_per_unit`` and the ``world_window`` the
+        pixels cover from ``VIEWCTR``/``VIEWSIZE``/``SCREENSIZE``. With
+        ``path`` the PNG is written there and the report beside it as
+        ``<path>.json``.
+        """
+        size = check_max_px(max_px)
+        wanted = normalize_region(window) if window is not None else None
+        settle = min(max(float(settle_s), 0.0), 30.0)
+
+        def _sync():
+            app = _acad_app()
+            doc = _acad_doc()
+            if wanted is not None:
+                app.ZoomWindow(_apoint(wanted[0], wanted[1]), _apoint(wanted[2], wanted[3]))
+            saved: dict[str, Any] = {}
+            if hide_ui:
+                for name in _CAPTURE_HIDDEN_UI:
+                    try:
+                        saved[name] = doc.GetVariable(name)
+                        _set_variable(doc, name, 0)
+                    except Exception:
+                        saved.pop(name, None)
+            try:
+                try:
+                    app.Update()
+                except Exception:
+                    log.debug("Application.Update failed before capture", exc_info=True)
+                if settle:
+                    time.sleep(settle)
+                frame = _view_frame(doc)
+                main = _find_autocad_hwnd()
+                view_hwnd = _find_view_hwnd(main, frame["screen_px"]) if main else None
+                png = _capture_window(view_hwnd) if view_hwnd else None
+            finally:
+                for name, value in saved.items():
+                    try:
+                        _set_variable(doc, name, value)
+                    except Exception:
+                        log.debug("could not restore %s", name, exc_info=True)
+            return png, frame, view_hwnd
+
+        png, frame, view_hwnd = await self._run(_sync)
+        if png is None:
+            return {
+                "png": None,
+                "error": "the AutoCAD view window was not found or could not be captured",
+                "window_found": view_hwnd is not None,
+            }
+        width, height = png_size(png)
+        factor = 1.0
+        if max(width, height) > size:
+            png = downscale_png(png, size)
+            new_w, _new_h = png_size(png)
+            factor = new_w / width
+            width, height = png_size(png)
+        report = capture_report(frame, (width, height), factor)
+        report["source"] = "view_window"
+        if path:
+            report["path"] = _write_capture(path, png, report)
+        report["png"] = png
+        return report
 
     async def view_screenshot_grounded(
         self,

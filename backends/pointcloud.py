@@ -37,7 +37,7 @@ from typing import Any
 
 ADDIN_NAME = "McpPointCloud"
 #: The add-in version this server speaks to (``Api.Version`` in the C#).
-ADDIN_VERSION = "0.1.1"
+ADDIN_VERSION = "0.1.2"
 BUNDLE_SOURCE = Path(__file__).resolve().parent / "addin" / f"{ADDIN_NAME}.bundle"
 
 TRUSTED_PATH_HINT = (

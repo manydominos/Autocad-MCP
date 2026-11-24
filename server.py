@@ -13082,20 +13082,27 @@ async def pointcloud_crop(
     plane: Annotated[str, "top, front or side"] = "top",
     zmin: Annotated[float | None, "top: band bottom (WCS Z)"] = None,
     zmax: Annotated[float | None, "top: band top (WCS Z)"] = None,
-    zband_mode: Annotated[str, "elevation (hide by height) or crop (second crop)"] = "elevation",
     inside: Annotated[bool, "Keep inside the outline"] = True,
-    inverted: Annotated[bool, "Invert"] = False,
     replace: Annotated[bool, "Remove earlier crops"] = True,
-    vertex_space: Annotated[str, "wcs or native (the cloud's own)"] = "wcs",
+    vertex_space: Annotated[str, "wcs, native or raw_wcs"] = "wcs",
+    options: Annotated[dict | None, "Test knobs: plane_mode, method, close, zband_space"] = None,
     ctx: Context = None,
 ) -> dict:
-    """Crop: plan = top + outline + zmin/zmax; section = front/side outline. Live only."""
+    """Crop (WCS outline, stored native); returns `stored_crops`. Live only."""
     if plane not in ("top", "front", "side"):
         raise InvalidArgsError("invalid_args: plane is top, front or side")
-    if zband_mode not in ("elevation", "crop"):
-        raise InvalidArgsError("invalid_args: zband_mode is elevation or crop")
-    if vertex_space not in ("wcs", "native"):
-        raise InvalidArgsError("invalid_args: vertex_space is wcs or native")
+    if vertex_space not in ("wcs", "native", "raw_wcs"):
+        raise InvalidArgsError("invalid_args: vertex_space is wcs, native or raw_wcs")
+    knobs = dict(options or {})
+    allowed_knobs = {
+        "plane_mode": ("none", "xy"),
+        "method": ("auto", "new", "edit_existing"),
+        "close": (True, False),
+        "zband_space": ("wcs", "native"),
+    }
+    for key, value in knobs.items():
+        if key not in allowed_knobs or value not in allowed_knobs[key]:
+            raise InvalidArgsError(f"invalid_args: options.{key} must be one of {allowed_knobs.get(key)}")
     if len(polygon) < 3 or any(len(p) < 2 for p in polygon):
         raise InvalidArgsError("invalid_args: polygon needs three or more [a, b] points")
     if (zmin is None) != (zmax is None):
@@ -13108,11 +13115,10 @@ async def pointcloud_crop(
         "plane": plane,
         "zmin": zmin,
         "zmax": zmax,
-        "zband_mode": zband_mode,
         "inside": bool(inside),
-        "inverted": bool(inverted),
         "replace": bool(replace),
         "vertex_space": vertex_space,
+        **knobs,
     }
     return await _backend(ctx).pointcloud("crop", payload)
 
@@ -13187,10 +13193,13 @@ async def pointcloud_section(
     normal: Annotated[list[float] | None, "Plane normal; default [0, 0, 1]"] = None,
     xdir: Annotated[list[float] | None, "In-plane X; default [1, 0, 0]"] = None,
     layer: Annotated[str, "Layer of the lines"] = "KONTROLA_OBLAK",
-    as_polyline: Annotated[bool, "Polylines, else lines/arcs"] = True,
+    draw: Annotated[bool, "Draw the lines (default: diagnostics only)"] = False,
+    space: Annotated[str, "wcs or native origin"] = "wcs",
     ctx: Context = None,
 ) -> dict:
-    """AutoCAD's section lines through a plane onto `layer`. Experimental. Live only."""
+    """EXPERIMENTAL section lines through a plane: diagnostics, `draw` adds lines. Live only."""
+    if space not in ("wcs", "native"):
+        raise InvalidArgsError("invalid_args: space is wcs or native")
     for name, value in (("origin", origin), ("normal", normal), ("xdir", xdir)):
         if value is not None and len(value) != 3:
             raise InvalidArgsError(f"invalid_args: {name} is [x, y, z]")
@@ -13200,7 +13209,8 @@ async def pointcloud_section(
         "normal": normal or [0.0, 0.0, 1.0],
         "xdir": xdir or [1.0, 0.0, 0.0],
         "layer": layer or "KONTROLA_OBLAK",
-        "as_polyline": bool(as_polyline),
+        "draw": bool(draw),
+        "space": space,
     }
     return await _backend(ctx).pointcloud("section", payload)
 

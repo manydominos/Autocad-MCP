@@ -7149,41 +7149,15 @@ def _view_image_result(report: dict, unavailable: str) -> ToolResult:
     tags={"view", "screenshot"},
 )
 async def view_capture(
-    window: Annotated[
-        list[float] | None,
-        "Optional [x0, y0, x1, y1] in WCS to zoom to first; omitted = the current view",
-    ] = None,
-    path: Annotated[
-        str | None,
-        "Optional .png path to write; the report is written beside it as <path>.json",
-    ] = None,
-    max_px: Annotated[
-        int,
-        Field(description="Long side of the image in pixels (64-4096).", ge=64, le=4096),
-    ] = 2048,
-    hide_ui: Annotated[
-        bool, "Hide ViewCube, navigation bar, UCS icon and grid for the shot (restored after)"
-    ] = True,
-    settle_s: Annotated[
-        float,
-        Field(
-            description="Seconds to wait before the shot (a point cloud draws progressively), 0-30.",
-            ge=0,
-            le=30,
-        ),
-    ] = 1.0,
+    window: Annotated[list[float] | None, "Zoom first to [x0, y0, x1, y1] (WCS)"] = None,
+    path: Annotated[str | None, "Write the PNG here (+ <path>.json)"] = None,
+    max_px: Annotated[int, Field(description="Long side, 64-4096 px.", ge=64, le=4096)] = 2048,
+    hide_ui: Annotated[bool, "Hide ViewCube, nav bar, UCS icon, grid"] = True,
+    settle_s: Annotated[float, Field(description="Wait before the shot, s.", ge=0, le=30)] = 1.0,
     ctx: Context = None,
 ):
-    """Capture AutoCAD's drawing view as AutoCAD draws it, with a known scale.
-
-    Unlike `view_render` (which draws an exported DXF and so misses what only
-    AutoCAD draws - an attached RCS/RCP point cloud, rasters, OLE), this
-    photographs the view window itself, without the ribbon and frame, and
-    states `px_per_unit` and `world_window` [x0, y0, x1, y1] so a pixel maps to
-    a WCS point (only in a plan view of the world UCS; otherwise both are null
-    with a `note`). `window` zooms first. `path` writes the PNG and a JSON
-    report beside it. Live (COM) only; headless refuses by capability.
-    """
+    """The view window as AutoCAD draws it (point clouds too, unlike view_render),
+    with `px_per_unit` and `world_window` in a plan view of the world UCS. Live only."""
     shot = None
     if path:
         shot = str(validate_path(path, allow_write=True, kinds=KINDS_IMAGE))

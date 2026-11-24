@@ -2358,13 +2358,21 @@ async def drawing_save_as(
         "Output format override: dwg, dxf, dwt. Default: derive "
         "from the path extension (the extension is authoritative).",
     ] = "",
+    version: Annotated[
+        str,
+        "DWG only: R2000, R2004, R2007, R2010, R2013 or R2018. Empty = R2018 "
+        "(AutoCAD 2018-2026 format).",
+    ] = "",
     ctx: Context = None,
 ) -> dict:
     """Save current drawing to a new path/format (DWG, DXF, or DWT template).
 
     The on-disk format is derived from the file extension so the bytes always
     match the name (N2) — e.g. 'part.dxf' writes DXF, not DWG. `format` overrides
-    only when the path has no recognised extension.
+    only when the path has no recognised extension. A DWG is written in
+    `version` (default R2018); the result reports `file_version`, read back
+    from the file's header. R2000 cannot store newer objects such as an
+    attached point cloud.
     """
     validated = validate_path(path, allow_write=True, kinds=KINDS_DRAWING)
     from pathlib import Path as _P
@@ -2372,6 +2380,11 @@ async def drawing_save_as(
     ext = _P(str(validated)).suffix.lstrip(".").lower()
     fmt = ext if ext in ("dxf", "dwg", "dwt") else (format.lower() or "dxf")
     await ctx.info(f"Saving as {fmt}: {validated}")
+    if version:
+        try:
+            return await _backend(ctx).drawing_save_as(str(validated), fmt, version=version)
+        except ValueError as exc:
+            raise ToolError(f"invalid_args: {exc}") from exc
     return await _backend(ctx).drawing_save_as(str(validated), fmt)
 
 

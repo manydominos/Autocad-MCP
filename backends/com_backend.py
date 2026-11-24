@@ -3203,6 +3203,34 @@ def _note_reached() -> None:
         probe["reached"] = True
 
 
+#: DWG header magic -> release name (the six bytes every DWG starts with).
+_DWG_HEADER_RELEASES = {
+    "AC1015": "R2000",
+    "AC1018": "R2004",
+    "AC1021": "R2007",
+    "AC1024": "R2010",
+    "AC1027": "R2013",
+    "AC1032": "R2018",
+}
+
+
+def dwg_header_version(path) -> dict | None:
+    """``{"code": "AC1032", "release": "R2018"}`` from a DWG's first six bytes.
+
+    ``None`` when the file cannot be read (a share still flushing, no file):
+    unknown, never a guess. An unrecognised code is reported with
+    ``release: None``.
+    """
+    try:
+        with open(path, "rb") as handle:
+            code = handle.read(6).decode("ascii", errors="replace")
+    except OSError:
+        return None
+    if not code.startswith("AC"):
+        return None
+    return {"code": code, "release": _DWG_HEADER_RELEASES.get(code)}
+
+
 def _dbmod_of(doc) -> int | None:
     """``DBMOD`` of ``doc`` (COM thread); None when it cannot be read.
 
@@ -4456,19 +4484,46 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
         await self._record_lineage(result["path"], dbmod)
         return result
 
-    async def drawing_save_as(self, path: str, fmt: str = "dwg") -> dict:
+    async def drawing_save_as(
+        self, path: str, fmt: str = "dwg", version: str | None = None
+    ) -> dict:
+        """``Document.SaveAs`` - a DWG in ``version`` (default R2018), DXF or DWT.
+
+        Until this fork's ``popravek/save-as-dwg-verzija`` a ``.dwg`` was
+        written as AcSaveAsType 12 = ac2000_dwg (header AC1015): a drawing
+        saved that way silently loses what R2000 cannot store - an attached
+        point cloud (AcDbPointCloudEx) among it. The DWG code now comes from
+        ``_DWG_SAVE_AS``, the table ``drawing_export_dwg`` uses, and the
+        version the file really has is read back from its header.
+        """
+        from backends.contracts.refs import DWG_VERSIONS
+
         self._refuse_recovered_source("drawing_save_as", path, False)
+        kind = fmt.lower()
+        wanted = None
+        if kind == "dwg":
+            wanted = version or "R2018"
+            if wanted not in DWG_VERSIONS:
+                raise ValueError(f"DWG version must be one of {DWG_VERSIONS}, got {version!r}")
+        elif version:
+            raise ValueError(f"version applies to DWG only; {fmt!r} has no version choice")
 
         def _sync():
             doc = _acad_doc()
-            # AutoCAD AcSaveAsType: 12 = ac2000_dwg, 61 = ac2013_dxf, 66 = ac2018_Template.
-            # "dwt" was 5 (acR13_dxf) until v1.6: a DWT request wrote an R13 DXF
-            # under a .dwt name.
-            fmt_map = {"dwg": 12, "dxf": 61, "dwt": 66}
-            acad_fmt = fmt_map.get(fmt.lower(), 12)
+            # AutoCAD AcSaveAsType: 61 = ac2013_dxf, 66 = ac2018_Template; the DWG
+            # codes are _DWG_SAVE_AS. "dwt" was 5 (acR13_dxf) until v1.6: a DWT
+            # request wrote an R13 DXF under a .dwt name.
+            if wanted is not None:
+                acad_fmt = self._DWG_SAVE_AS[wanted]
+            else:
+                acad_fmt = {"dxf": 61, "dwt": 66}.get(kind, self._DWG_SAVE_AS["R2018"])
             doc.SaveAs(path, acad_fmt)
             self._rekey_bound_sync(doc)
-            return {"ok": True, "path": path, "format": fmt}, _dbmod_of(doc)
+            result = {"ok": True, "path": path, "format": fmt}
+            if wanted is not None:
+                result["version"] = wanted
+                result["file_version"] = dwg_header_version(path)
+            return result, _dbmod_of(doc)
 
         result, dbmod = await self._run(_sync)
         await self._record_lineage(path, dbmod)

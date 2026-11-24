@@ -3378,11 +3378,15 @@ class EzdxfBackend(EzdxfCheckpoints, EzdxfChangeSets, AutoCADBackend):
 
         return await self._async(_sync)
 
-    async def drawing_save_as(self, path: str, fmt: str = "dxf") -> dict:
+    async def drawing_save_as(
+        self, path: str, fmt: str = "dxf", version: str | None = None
+    ) -> dict:
         # The extension is authoritative (N2): a .dwg name is a DWG request even
         # when the caller passes fmt="dxf", because the bytes must match the name.
         if fmt.lower() == "dwg" or _is_dwg_path(path):
             raise _refuse_dwg("drawing_save_as", path)
+        if version:
+            raise ValueError(f"version applies to DWG only; {fmt!r} has no version choice")
 
         def _sync():
             self._require_doc()

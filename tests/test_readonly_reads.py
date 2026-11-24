@@ -37,7 +37,6 @@ NO_DOCUMENT_READ = {
     "system_variable_describe": "the static SYSVAR_CATALOG",
     "system_preferences_get": "live-only (capability preferences)",
     "user_pick_point": "live-only (capability interactive_prompt)",
-    "pointcloud_info": "live-only (capability pointcloud): the McpPointCloud add-in reads it",
     "user_select": "live-only (capability interactive_prompt)",
     "template_list": "the bundled layer templates",
     "drawing_template_list": "the bundled drawing templates",
@@ -50,6 +49,7 @@ NO_DOCUMENT_READ = {
     "analysis_measure_distance": "arithmetic on the two points it is given",
     "analysis_measure_area": "arithmetic on the polygon it is given",
     "selection_get": "returns the backend's remembered selection",
+    "pointcloud_info": "live-only (capability pointcloud): the McpPointCloud add-in reads it",
 }
 
 #: Read tools that reach ``_async`` WITHOUT ``readonly=True`` on purpose.

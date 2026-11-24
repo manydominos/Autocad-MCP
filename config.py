@@ -195,17 +195,6 @@ class Settings:
         # did; a negative value reads as 0.
         self.com_snapshot_ttl: float = max(0.0, float(os.environ.get("COM_SNAPSHOT_TTL", "5")))
 
-        # Fork (popravek/oblak-tock): the point cloud verbs run in the
-        # McpPointCloud .NET add-in. POINTCLOUD_CALL_TIMEOUT bounds one call
-        # (attaching a 16 GB RCS from a share, a section); with
-        # POINTCLOUD_ADDIN_AUTOINSTALL the server copies the autoloader bundle
-        # to %APPDATA%\Autodesk\ApplicationPlugins when the add-in does not answer.
-        self.pointcloud_call_timeout: float = max(
-            5.0, float(os.environ.get("POINTCLOUD_CALL_TIMEOUT", "300"))
-        )
-        self.pointcloud_addin_autoinstall: bool = os.environ.get(
-            "POINTCLOUD_ADDIN_AUTOINSTALL", "true"
-        ).strip().lower() not in ("0", "false", "no", "off")
 
         # 1.8-05: how long a command sent to AutoCAD's command line (a raw
         # system_run_command, drawing_undo / drawing_redo, a corner op, the
@@ -242,6 +231,18 @@ class Settings:
         # longer than a per-call COM_CALL_TIMEOUT tuned for short calls (15 s on
         # the AutoCAD VM); a dialog AutoCAD shows meanwhile is reported by name.
         self.open_call_timeout: float = float(os.environ.get("OPEN_CALL_TIMEOUT", "120"))
+
+        # Fork (popravek/oblak-tock): the point cloud verbs run in the
+        # McpPointCloud .NET add-in. POINTCLOUD_CALL_TIMEOUT bounds one call
+        # (attaching a 16 GB RCS from a share, a section); with
+        # POINTCLOUD_ADDIN_AUTOINSTALL the server copies the autoloader bundle
+        # to %APPDATA%\Autodesk\ApplicationPlugins when the add-in does not answer.
+        self.pointcloud_call_timeout: float = max(
+            5.0, float(os.environ.get("POINTCLOUD_CALL_TIMEOUT", "300"))
+        )
+        self.pointcloud_addin_autoinstall: bool = os.environ.get(
+            "POINTCLOUD_ADDIN_AUTOINSTALL", "true"
+        ).strip().lower() not in ("0", "false", "no", "off")
 
         # Per-call timeout for the headless ezdxf backend. Every ezdxf method
         # runs under one document lock, so a single hung call (pathological DXF,

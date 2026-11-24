@@ -1763,6 +1763,10 @@ TOOL_ALIASES: dict[str, ToolAliases] = {
         acad=("ZOOM",),
         synonyms=("zoom to fit", "fit the drawing on screen", "see everything"),
     ),
+    "view_zoom_window": ToolAliases(
+        acad=("ZOOM",),
+        synonyms=("zoom into a region", "close up of an area", "magnify a rectangle"),
+    ),
     "pointcloud_attach": ToolAliases(
         acad=("POINTCLOUDATTACH",),
         synonyms=("attach rcs", "attach rcp", "insert a point cloud", "load a laser scan"),
@@ -1783,10 +1787,6 @@ TOOL_ALIASES: dict[str, ToolAliases] = {
     ),
     "pointcloud_section": ToolAliases(
         synonyms=("section lines from the cloud", "extract a profile", "cut the scan into lines"),
-    ),
-    "view_zoom_window": ToolAliases(
-        acad=("ZOOM",),
-        synonyms=("zoom into a region", "close up of an area", "magnify a rectangle"),
     ),
     # ── P&ID ────────────────────────────────────────────────────────────────
     "pid_symbol_list": ToolAliases(

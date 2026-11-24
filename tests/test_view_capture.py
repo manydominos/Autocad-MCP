@@ -142,6 +142,53 @@ async def test_no_view_window_is_reported(live, monkeypatch):
     assert doc.vars["UCSICON"] == 3
 
 
+@pytest.fixture
+def styled(live, monkeypatch):
+    import backends.com_backend as cb
+
+    backend, doc, _z = live
+    doc.vars["VSCURRENT"] = "2dWireframe"
+    sent = []
+
+    def _send(d, cmd, *a, **k):
+        sent.append(cmd)
+        d.vars["VSCURRENT"] = {"_Hidden": "Hidden", "_2dwireframe": "2dWireframe"}.get(
+            cmd.split()[-1], cmd.split()[-1]
+        )
+
+    monkeypatch.setattr(cb.ComBackend, "_safe_send_command", staticmethod(_send))
+    return backend, doc, sent
+
+
+async def test_a_cloud_in_2d_wireframe_is_shot_in_hidden_and_restored(styled, monkeypatch):
+    import backends.com_backend as cb
+
+    backend, doc, sent = styled
+    monkeypatch.setattr(cb, "_has_point_cloud", lambda d: True)
+    report = await backend.view_capture(settle_s=0)
+    assert sent == ["_.VSCURRENT _Hidden", "_.VSCURRENT _2dwireframe"]
+    assert report["visual_style"] == {"previous": "2dWireframe", "used": "Hidden", "restored": True}
+    assert doc.vars["VSCURRENT"] == "2dWireframe"
+
+
+async def test_no_cloud_or_keep_leaves_the_style(styled, monkeypatch):
+    import backends.com_backend as cb
+
+    backend, _doc, sent = styled
+    monkeypatch.setattr(cb, "_has_point_cloud", lambda d: False)
+    await backend.view_capture(settle_s=0)
+    monkeypatch.setattr(cb, "_has_point_cloud", lambda d: True)
+    report = await backend.view_capture(settle_s=0, visual_style="keep")
+    assert sent == [] and report["visual_style"]["used"] == "2dWireframe"
+
+
+async def test_an_unknown_visual_style_is_refused(styled):
+    backend, _doc, sent = styled
+    with pytest.raises(ValueError, match="visual_style"):
+        await backend.view_capture(settle_s=0, visual_style="sketchy")
+    assert sent == []
+
+
 async def test_headless_refuses_by_capability(tmp_path):
     from backends.capability import UnsupportedCapabilityError
     from backends.ezdxf_backend import EzdxfBackend

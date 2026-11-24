@@ -19,11 +19,11 @@ Live through COM on Windows, or headless through ezdxf anywhere — one typed co
 
 </div>
 
-> **v1.8 release snapshot:** 259 tools · 13 resources · 5 prompt templates · 7661 collected tests.
-> 259 is the **registered** count. Since 1.8.0 a default install lists six over `tools/list`
+> **v1.8 release snapshot:** 266 tools · 13 resources · 5 prompt templates · 7727 collected tests.
+> 266 is the **registered** count. Since 1.8.0 a default install lists six over `tools/list`
 > (`DISCOVERY_MODE=search`: `search_tools`, `describe_tool`, `call_tool` and the three
 > `DISCOVERY_PINNED` tools), and every tool the profile and packs allow stays callable by name;
-> `DISCOVERY_MODE=off` lists 255: the 254 a default profile enables (`ENABLE_3D` unset hides the five
+> `DISCOVERY_MODE=off` lists 262: the 261 a default profile enables (`ENABLE_3D` unset hides the five
 > solids) plus `describe_tool`. `system_about` is the runtime authority.
 
 ## What's new in 1.8

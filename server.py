@@ -13038,12 +13038,8 @@ async def pointcloud_attach(
     layer: Annotated[str, "Layer (created if missing)"] = "",
     ctx: Context = None,
 ) -> dict:
-    """Attach a ReCap point cloud (.rcs/.rcp) to model space, no prompt.
-
-    Returns `cloud` as pointcloud_info does. Compare `geom_extents` with the
-    scan's known extent before trusting the transform. Live AutoCAD only, through
-    the McpPointCloud add-in (`addin_not_loaded` names the folder to trust).
-    """
+    """Attach a ReCap point cloud (.rcs/.rcp), no prompt; check `geom_extents`.
+    Live only, via the McpPointCloud add-in (`addin_not_loaded` names the folder to trust)."""
     validated = validate_path(path)
     if validated.suffix.lower() not in (".rcs", ".rcp"):
         raise InvalidArgsError(f"invalid_args: a point cloud is .rcs or .rcp, got {validated.name!r}")
@@ -13070,9 +13066,8 @@ async def pointcloud_info(
     items: Annotated[bool, "List scans and regions"] = True,
     ctx: Context = None,
 ) -> dict:
-    """List attached RCS/RCP point clouds: path, location, scale, rotation,
-    geom/native extents, points, scans, regions, crops, stylization and (items)
-    scans with their origins (an RCP; a single RCS has none). Live AutoCAD only."""
+    """Attached point clouds: path, transform, extents, points, crops, style; scans
+    with origins (RCP only). Live only."""
     payload = {"handle": _pc_handle(cloud), "items": bool(items)}
     return await _backend(ctx).pointcloud("info", payload)
 
@@ -13095,9 +13090,7 @@ async def pointcloud_crop(
     vertex_space: Annotated[str, "wcs or native (the cloud's own)"] = "wcs",
     ctx: Context = None,
 ) -> dict:
-    """Crop a point cloud: a plan cut is plane=top with the floor outline and
-    zmin/zmax (e.g. floor+950..1050 mm); a section is front/side with an outline
-    in that plane. Undo with pointcloud_crop_clear. Live AutoCAD only."""
+    """Crop: plan = top + outline + zmin/zmax; section = front/side outline. Live only."""
     if plane not in ("top", "front", "side"):
         raise InvalidArgsError("invalid_args: plane is top, front or side")
     if zband_mode not in ("elevation", "crop"):
@@ -13158,7 +13151,7 @@ async def pointcloud_style(
     lod: Annotated[int | None, "POINTCLOUDLOD 1-10"] = None,
     ctx: Context = None,
 ) -> dict:
-    """Set how a point cloud is drawn; only the given values change. Live AutoCAD only."""
+    """Point cloud display; only given values change. Live only."""
     allowed = {"truecolor", "single", "normal", "height", "intensity", "classification"}
     if stylization is not None and stylization not in allowed:
         raise InvalidArgsError(f"invalid_args: stylization is one of {sorted(allowed)}")
@@ -13196,12 +13189,9 @@ async def pointcloud_section(
     xdir: Annotated[list[float] | None, "In-plane X; default [1, 0, 0]"] = None,
     layer: Annotated[str, "Layer of the lines"] = "KONTROLA_OBLAK",
     as_polyline: Annotated[bool, "Polylines, else lines/arcs"] = True,
-    fill_gap: Annotated[float | None, "Gap to bridge"] = None,
-    min_segment: Annotated[float | None, "Shortest segment kept"] = None,
     ctx: Context = None,
 ) -> dict:
-    """AutoCAD's section-line extraction through a plane, drawn on `layer`
-    (a non-plotting control layer). Experimental; measure with the E57 in Python."""
+    """AutoCAD's section lines through a plane onto `layer`. Experimental. Live only."""
     for name, value in (("origin", origin), ("normal", normal), ("xdir", xdir)):
         if value is not None and len(value) != 3:
             raise InvalidArgsError(f"invalid_args: {name} is [x, y, z]")
@@ -13212,8 +13202,6 @@ async def pointcloud_section(
         "xdir": xdir or [1.0, 0.0, 0.0],
         "layer": layer or "KONTROLA_OBLAK",
         "as_polyline": bool(as_polyline),
-        "fill_gap": fill_gap,
-        "min_segment": min_segment,
     }
     return await _backend(ctx).pointcloud("section", payload)
 

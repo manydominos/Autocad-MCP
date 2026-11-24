@@ -29,7 +29,7 @@ namespace McpPointCloud
 {
     public class Api
     {
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.1";
 
         [LispFunction("mcp-pc")]
         public object Dispatch(ResultBuffer args)
@@ -41,10 +41,15 @@ namespace McpPointCloud
                 if (a.Length > 0 && a[0].Value is string) req = (string)a[0].Value;
             }
             if (req == null) return "err";
-            var js = new JavaScriptSerializer();
-            js.MaxJsonLength = int.MaxValue;
+            JavaScriptSerializer js;
             string outPath = req + ".out";
             Dictionary<string, object> res;
+            try
+            {
+                js = new JavaScriptSerializer();
+                js.MaxJsonLength = int.MaxValue;
+            }
+            catch (System.Exception) { return "err"; }
             try
             {
                 var r = js.Deserialize<Dictionary<string, object>>(File.ReadAllText(req));
@@ -62,10 +67,17 @@ namespace McpPointCloud
             {
                 res = Fail("exception", ex.GetType().Name + ": " + ex.Message);
             }
-            string tmp = outPath + ".part";
-            File.WriteAllText(tmp, js.Serialize(res));
-            if (File.Exists(outPath)) File.Delete(outPath);
-            File.Move(tmp, outPath);
+            try
+            {
+                string tmp = outPath + ".part";
+                File.WriteAllText(tmp, js.Serialize(res));
+                if (File.Exists(outPath)) File.Delete(outPath);
+                File.Move(tmp, outPath);
+            }
+            catch (System.Exception)
+            {
+                return "err";  // the server reports the missing answer; AutoCAD keeps running
+            }
             object ok;
             return res.TryGetValue("ok", out ok) && ok is bool && (bool)ok ? "ok" : "err";
         }
@@ -115,7 +127,7 @@ namespace McpPointCloud
         static Dictionary<string, object> Info(Dictionary<string, object> r)
         {
             Database db = AcApp.DocumentManager.MdiActiveDocument.Database;
-            bool items = Bool(r, "items", true);
+            bool items = Bool(r, "items", false);
             var list = new List<object>();
             string handle = Str(r, "handle", null);
             if (!string.IsNullOrEmpty(handle))
@@ -156,7 +168,9 @@ namespace McpPointCloud
             using (doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForWrite);
+                PointCloudEx pc;
+                string lockedWhy = OpenForWrite(db, tr, id, out pc);
+                if (lockedWhy != null) return Fail("layer_locked", lockedWhy);
                 if (replace) pc.clearCropping();
                 Matrix3d toNative = Matrix3d.Identity;
                 if (vertexSpace == "native") toNative = CloudTransform(pc).Inverse();
@@ -230,7 +244,9 @@ namespace McpPointCloud
             using (doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForWrite);
+                PointCloudEx pc;
+                string lockedWhy = OpenForWrite(db, tr, id, out pc);
+                if (lockedWhy != null) return Fail("layer_locked", lockedWhy);
                 pc.clearCropping();
                 if (Bool(r, "reset_style", true))
                 {
@@ -254,7 +270,9 @@ namespace McpPointCloud
             using (doc.LockDocument())
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
-                var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForWrite);
+                PointCloudEx pc;
+                string lockedWhy = OpenForWrite(db, tr, id, out pc);
+                if (lockedWhy != null) return Fail("layer_locked", lockedWhy);
                 string s = Str(r, "stylization", null);
                 if (s != null)
                 {
@@ -296,6 +314,10 @@ namespace McpPointCloud
             ObjectId id;
             string why = Find(db, Str(r, "handle", null), out id);
             if (why != null) return Fail("not_found", why);
+            var state = Describe(db, id, false);
+            object foundObj;
+            if (!state.TryGetValue("file_found", out foundObj) || !(foundObj is bool) || !(bool)foundObj)
+                return Fail("file_not_found", "the point cloud file is not on this computer; a section needs its points");
             Point3d origin = Pt(r, "origin", Point3d.Origin);
             Vector3d normal = Vec(r, "normal", Vector3d.ZAxis);
             Vector3d xdir = Vec(r, "xdir", Vector3d.XAxis);
@@ -353,100 +375,221 @@ namespace McpPointCloud
         }
 
         // ── description ────────────────────────────────────────────────────
+        //
+        // AutoCAD 2021 crash (2026-11-24): pointcloud_info aborted AutoCAD with
+        // "INTERNAL ERROR: !dbobji.cpp@8627: eNotOpenForWrite". Cause: the old code
+        // called PointCloudEx.getPointCloudCropping(i) on an entity opened ForRead.
+        // The ObjectARX/.NET reference says of getPointCloudCropping: "Returns a
+        // cropping boundary by index, for editing. Requires that the
+        // AcDbPointCloudEx be open for writing." (the const reader
+        // getPointCloudCroppingConst is not exposed in the R24.0 managed API).
+        // assertWriteEnabled is a fatal C++ abort - no try/catch can stop it -
+        // so the open mode is what matters:
+        //   * the basic description reads only const getters on a ForRead object;
+        //   * crop details are read in their own transaction that opens the cloud
+        //     ForWrite, changes nothing and is aborted - and only when asked
+        //     (items) and the layer is not locked;
+        //   * extents, definition counts, scans and regions are read only when the
+        //     point cloud file is found on disk (an unloaded definition is not
+        //     touched beyond its file names).
 
         static Dictionary<string, object> Describe(Database db, ObjectId id, bool items)
         {
             var d = new Dictionary<string, object>();
-            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            d["handle"] = id.Handle.ToString();
+            bool found = false;
+            try
             {
-                var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForRead);
-                d["handle"] = id.Handle.ToString();
-                d["layer"] = pc.Layer;
-                d["path"] = Safe(delegate { return (object)pc.ActiveFileName; });
-                d["location"] = P(pc.Location);
-                d["scale"] = pc.Scale;
-                d["rotation_deg"] = pc.Rotation * 180.0 / Math.PI;
-                d["geom_extents"] = Safe(delegate { return (object)E(pc.GeomExtents); });
-                d["native_extents"] = Safe(delegate { return (object)E(pc.NativeExtents); });
-                d["show_cropped"] = pc.ShowCropped;
-                d["cropping_inverted"] = pc.CroppingInverted;
-                d["stylization"] = pc.Stylization.ToString();
-                d["color_scheme"] = Safe(delegate { return (object)pc.CurrentColorScheme; });
-                d["elevation_range"] = Safe(delegate { var t = pc.MinMaxElevation; return (object)new[] { t.Item1, t.Item2 }; });
-                d["elevation_out_of_range"] = pc.ElevationOutOfRangeBehavior.ToString();
-                int n = pc.getCroppingCount();
-                var crops = new List<object>();
-                for (int i = 0; i < n; i++)
+                using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
                 {
+                    var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForRead);
+                    d["layer"] = Safe(delegate { return (object)pc.Layer; });
+                    d["location"] = Safe(delegate { return (object)P(pc.Location); });
+                    d["scale"] = Safe(delegate { return (object)pc.Scale; });
+                    d["rotation_deg"] = Safe(delegate { return (object)(pc.Rotation * 180.0 / Math.PI); });
+                    d["show_cropped"] = Safe(delegate { return (object)pc.ShowCropped; });
+                    d["cropping_inverted"] = Safe(delegate { return (object)pc.CroppingInverted; });
+                    d["crop_count"] = Safe(delegate { return (object)pc.getCroppingCount(); });
+                    d["stylization"] = Safe(delegate { return (object)pc.Stylization.ToString(); });
+                    d["elevation_out_of_range"] = Safe(delegate { return (object)pc.ElevationOutOfRangeBehavior.ToString(); });
+                    string active = null, source = null;
+                    try { active = pc.ActiveFileName; } catch (System.Exception) { }
+                    PointCloudDefEx def = null;
                     try
                     {
-                        PointCloudCrop c = pc.getPointCloudCropping(i);
-                        var cd = new Dictionary<string, object>();
-                        cd["type"] = c.CropType.ToString();
-                        cd["inside"] = c.Inside;
-                        cd["inverted"] = c.Inverted;
-                        Plane pl = c.CropPlane;
-                        cd["plane_origin"] = P(pl.PointOnPlane);
-                        cd["plane_normal"] = V(pl.Normal);
-                        var vs = new List<object>();
-                        foreach (Point3d v in c.Vertices) vs.Add(P(v));
-                        cd["vertices"] = vs;
-                        crops.Add(cd);
+                        def = (PointCloudDefEx)tr.GetObject(pc.PointCloudDefExId, OpenMode.ForRead);
+                        if (string.IsNullOrEmpty(active)) active = def.ActiveFileName;
+                        source = def.SourceFileName;
                     }
-                    catch (System.Exception ex) { crops.Add(new Dictionary<string, object> { { "error", ex.Message } }); }
-                }
-                d["crops"] = crops;
-                try
-                {
-                    var def = (PointCloudDefEx)tr.GetObject(pc.PointCloudDefExId, OpenMode.ForRead);
-                    var dd = new Dictionary<string, object>();
-                    dd["source_file"] = def.SourceFileName;
-                    dd["active_file"] = def.ActiveFileName;
-                    dd["file_type"] = def.FileType;
-                    dd["points"] = def.totalPointsCount;
-                    dd["scans"] = def.totalScansCount;
-                    dd["regions"] = def.totalRegionsCount;
-                    dd["extents"] = Safe(delegate { return (object)E(def.extents); });
-                    dd["rcs_files"] = Safe(delegate { return (object)def.getAllRcsFilePaths(); });
-                    d["definition"] = dd;
-                }
-                catch (System.Exception ex) { d["definition"] = new Dictionary<string, object> { { "error", ex.Message } }; }
-                if (items)
-                {
-                    var rows = new List<object>();
-                    try
+                    catch (System.Exception ex) { d["definition_error"] = ex.Message; }
+                    string resolved = ResolveFile(db, active) ?? ResolveFile(db, source);
+                    found = resolved != null;
+                    d["path"] = active;
+                    d["source_file"] = source;
+                    d["file_found"] = found;
+                    if (found) d["resolved_path"] = resolved;
+                    if (found)
                     {
-                        foreach (PointCloudItem it in pc.getPointCloudDataList())
+                        d["geom_extents"] = Safe(delegate { return (object)E(pc.GeomExtents); });
+                        d["native_extents"] = Safe(delegate { return (object)E(pc.NativeExtents); });
+                    }
+                    if (items)
+                    {
+                        d["color_scheme"] = Safe(delegate { return (object)pc.CurrentColorScheme; });
+                        d["elevation_range"] = Safe(delegate { var t = pc.MinMaxElevation; return (object)new[] { t.Item1, t.Item2 }; });
+                        if (found && def != null)
                         {
-                            if (rows.Count >= 500) break;
-                            var row = new Dictionary<string, object>();
-                            row["name"] = it.Name;
-                            row["guid"] = it.Guid;
-                            row["id"] = it.ItemId;
-                            row["category"] = it.CategoryId.ToString();
-                            row["visible"] = it.Visibility;
-                            if (!string.IsNullOrEmpty(it.Guid) && it.CategoryId == PointCloudItemType.Scan)
-                            {
-                                try
-                                {
-                                    System.ValueType ov, ev;
-                                    if (pc.GetScanViewInfo(it.Guid, out ov, out ev))
-                                    {
-                                        if (ov is Point3d) row["scan_origin"] = P((Point3d)ov);
-                                        if (ev is Extents3d) row["scan_extents"] = E((Extents3d)ev);
-                                    }
-                                }
-                                catch (System.Exception) { }
-                            }
-                            rows.Add(row);
+                            var dd = new Dictionary<string, object>();
+                            PointCloudDefEx df = def;
+                            dd["file_type"] = Safe(delegate { return (object)df.FileType; });
+                            dd["points"] = Safe(delegate { return (object)df.totalPointsCount; });
+                            dd["scans"] = Safe(delegate { return (object)df.totalScansCount; });
+                            dd["regions"] = Safe(delegate { return (object)df.totalRegionsCount; });
+                            dd["extents"] = Safe(delegate { return (object)E(df.extents); });
+                            dd["rcs_files"] = Safe(delegate { return (object)df.getAllRcsFilePaths(); });
+                            d["definition"] = dd;
+                            d["items"] = ItemRows(pc);
+                        }
+                        else
+                        {
+                            d["details_skipped"] = "file_not_found: the point cloud file is not on this computer; only the stored entity data is read";
                         }
                     }
-                    catch (System.Exception ex) { rows.Add(new Dictionary<string, object> { { "error", ex.Message } }); }
-                    d["items"] = rows;
+                    tr.Commit();
                 }
-                tr.Commit();
             }
+            catch (System.Exception ex)
+            {
+                d["error"] = ex.GetType().Name + ": " + ex.Message;
+            }
+            if (items) d["crops"] = CropDetails(db, id);
             return d;
+        }
+
+        static List<object> ItemRows(PointCloudEx pc)
+        {
+            var rows = new List<object>();
+            try
+            {
+                foreach (PointCloudItem it in pc.getPointCloudDataList())
+                {
+                    if (rows.Count >= 500) break;
+                    var row = new Dictionary<string, object>();
+                    row["name"] = it.Name;
+                    row["guid"] = it.Guid;
+                    row["id"] = it.ItemId;
+                    row["category"] = it.CategoryId.ToString();
+                    row["visible"] = it.Visibility;
+                    if (!string.IsNullOrEmpty(it.Guid) && it.CategoryId == PointCloudItemType.Scan)
+                    {
+                        try
+                        {
+                            System.ValueType ov, ev;
+                            if (pc.GetScanViewInfo(it.Guid, out ov, out ev))
+                            {
+                                if (ov is Point3d) row["scan_origin"] = P((Point3d)ov);
+                                if (ev is Extents3d) row["scan_extents"] = E((Extents3d)ev);
+                            }
+                        }
+                        catch (System.Exception ex) { row["scan_error"] = ex.Message; }
+                    }
+                    rows.Add(row);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                rows.Add(Fail("api_error", "getPointCloudDataList: " + ex.Message));
+            }
+            return rows;
+        }
+
+        // Crop boundaries can only be read from a cloud open for write (API rule,
+        // see above). Opened ForWrite under a document lock, read, never changed,
+        // the transaction aborted. A locked layer is not opened at all.
+        static object CropDetails(Database db, ObjectId id)
+        {
+            try
+            {
+                string locked = LockedLayer(db, id);
+                if (locked != null)
+                    return Fail("layer_locked", "crop details need the cloud open for write; layer " + locked + " is locked");
+                Document doc = AcApp.DocumentManager.MdiActiveDocument;
+                var crops = new List<object>();
+                using (doc.LockDocument())
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    var pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForWrite);
+                    int n = pc.getCroppingCount();
+                    for (int i = 0; i < n; i++)
+                    {
+                        try
+                        {
+                            PointCloudCrop c = pc.getPointCloudCropping(i);
+                            var cd = new Dictionary<string, object>();
+                            cd["type"] = c.CropType.ToString();
+                            cd["inside"] = c.Inside;
+                            cd["inverted"] = c.Inverted;
+                            Plane pl = c.CropPlane;
+                            cd["plane_origin"] = P(pl.PointOnPlane);
+                            cd["plane_normal"] = V(pl.Normal);
+                            var vs = new List<object>();
+                            foreach (Point3d v in c.Vertices) vs.Add(P(v));
+                            cd["vertices"] = vs;
+                            crops.Add(cd);
+                        }
+                        catch (System.Exception ex) { crops.Add(Fail("api_error", "getPointCloudCropping(" + i + "): " + ex.Message)); }
+                    }
+                    tr.Abort();  // read only: nothing was changed, nothing is kept
+                }
+                return crops;
+            }
+            catch (System.Exception ex)
+            {
+                return Fail("api_error", "crop details: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        // Layer name if the entity's layer is locked (ForWrite would throw eOnLockedLayer), else null.
+        static string LockedLayer(Database db, ObjectId id)
+        {
+            using (Transaction tr = db.TransactionManager.StartOpenCloseTransaction())
+            {
+                var ent = (Entity)tr.GetObject(id, OpenMode.ForRead);
+                var ltr = (LayerTableRecord)tr.GetObject(ent.LayerId, OpenMode.ForRead);
+                string name = ltr.IsLocked ? ltr.Name : null;
+                tr.Commit();
+                return name;
+            }
+        }
+
+        // A point cloud path as AutoCAD stores it may be relative (".\folder\x.rcp")
+        // to the drawing's folder. Returns the existing full path, or null.
+        static string ResolveFile(Database db, string path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            try
+            {
+                if (Path.IsPathRooted(path) && File.Exists(path)) return path;
+                string folder = null;
+                try { folder = Path.GetDirectoryName(db.Filename); } catch (System.Exception) { }
+                if (!string.IsNullOrEmpty(folder))
+                {
+                    string candidate = Path.GetFullPath(Path.Combine(folder, path));
+                    if (File.Exists(candidate)) return candidate;
+                }
+            }
+            catch (System.Exception) { }
+            return null;
+        }
+
+        // Opens the cloud for write unless its layer is locked; null error = opened.
+        static string OpenForWrite(Database db, Transaction tr, ObjectId id, out PointCloudEx pc)
+        {
+            pc = null;
+            string locked = LockedLayer(db, id);
+            if (locked != null) return "layer " + locked + " is locked; unlock it first";
+            pc = (PointCloudEx)tr.GetObject(id, OpenMode.ForWrite);
+            return null;
         }
 
         // ── helpers ────────────────────────────────────────────────────────

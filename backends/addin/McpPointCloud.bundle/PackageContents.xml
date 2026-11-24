@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage SchemaVersion="1.0" AutodeskProduct="AutoCAD" ProductType="Application"
-                    Name="McpPointCloud" AppVersion="0.1.0"
+                    Name="McpPointCloud" AppVersion="0.1.1"
                     Description="Point cloud verbs (attach, info, crop, style, section) for autocad-mcp"
                     Author="autocad-mcp fork" ProductCode="{6C1B7E52-3A41-4F0E-9B8D-2F5C7A9E0D11}"
                     UpgradeCode="{0E3D9B6A-55C2-4D7F-A1E8-7B2C4F6A9D30}" HelpFile="">
@@ -8,7 +8,7 @@
   <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3" />
   <Components Description="McpPointCloud">
     <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" SeriesMax="R24.3" />
-    <ComponentEntry AppName="McpPointCloud" Version="0.1.0" ModuleName="./Contents/McpPointCloud.dll"
+    <ComponentEntry AppName="McpPointCloud" Version="0.1.1" ModuleName="./Contents/McpPointCloud.dll"
                     AppDescription="(mcp-pc request.json) - point cloud verbs for the MCP server"
                     LoadOnAutoCADStartup="True" />
   </Components>

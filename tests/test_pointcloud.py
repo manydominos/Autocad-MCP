@@ -88,6 +88,42 @@ async def test_install_replaces_an_older_version(tmp_path):
     assert not list(tmp_path.glob("*.old-*")) and not list(tmp_path.glob("*.new-*"))
 
 
+async def test_a_loaded_dll_is_renamed_aside_and_replaced(tmp_path, monkeypatch):
+    target = tmp_path / "McpPointCloud.bundle"
+    (target / "Contents").mkdir(parents=True)
+    (target / "PackageContents.xml").write_text('<x AppVersion="0.1.0"/>', encoding="utf-8")
+    (target / "Contents" / "McpPointCloud.dll").write_bytes(b"old dll")
+    real_copy = pc.shutil.copyfile
+    calls = {"n": 0}
+
+    def _copy(src, dst, *a, **k):
+        if str(dst).endswith(".dll") and Path(dst).exists() and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError("loaded by AutoCAD")
+        return real_copy(src, dst, *a, **k)
+
+    monkeypatch.setattr(pc.shutil, "copyfile", _copy)
+    report = pc.install_bundle(target=target)
+    assert report["installed"] is True and report["reason"] == "staged_restart_autocad"
+    contents = target / "Contents"
+    assert (contents / "McpPointCloud.dll").read_bytes() != b"old dll"
+    assert [p.read_bytes() for p in contents.glob("McpPointCloud.dll.old-*")] == [b"old dll"]
+    assert pc.bundle_version(target) == pc.ADDIN_VERSION
+
+
+async def test_crop_boundaries_are_read_only_from_a_cloud_open_for_write():
+    """AutoCAD 2021 aborted (eNotOpenForWrite) when getPointCloudCropping ran on a
+    ForRead cloud: the API reads crops only from an entity open for write."""
+    source = (ROOT / "addin" / "McpPointCloud" / "McpPointCloud.cs").read_text(encoding="utf-8")
+    code = chr(10).join(line for line in source.splitlines() if not line.strip().startswith("//"))
+    methods = re.split(r"\n        static ", code)
+    readers = [m for m in methods if "getPointCloudCropping(" in m]
+    assert readers, "the crop reader exists"
+    for body in readers:
+        assert "OpenMode.ForWrite" in body and "OpenMode.ForRead" not in body, body[:120]
+        assert "tr.Abort()" in body or "tr.Commit()" in body
+
+
 async def test_not_loaded_error_names_the_folder_to_trust(tmp_path):
     error = pc.not_loaded_error({"contents": "C:/X/Contents", "reason": "copied", "target": "C:/X"})
     text = str(error)
@@ -104,6 +140,7 @@ class _Doc:
         self.vars = {"CMDACTIVE": 0}
         self.sent = []
         self.handler = handler
+        self.ping_version = pc.ADDIN_VERSION
 
     def GetVariable(self, name):
         return self.vars[name]
@@ -118,7 +155,11 @@ class _Doc:
         match = re.fullmatch(r'\(mcp-pc "(.+)"\)\n', cmd)
         request = Path(match.group(1))
         body = json.loads(request.read_text(encoding="utf-8"))
-        pc.answer_path(request).write_text(json.dumps(self.handler(body)), encoding="utf-8")
+        if body["op"] == "ping":
+            answer = {"ok": True, "version": self.ping_version}
+        else:
+            answer = self.handler(body)
+        pc.answer_path(request).write_text(json.dumps(answer), encoding="utf-8")
 
 
 @pytest.fixture
@@ -149,6 +190,27 @@ async def test_a_call_round_trips_and_cleans_up(live):
     assert answer["echo"]["handle"] == "1F"
     assert holder.doc.sent[0].startswith('(mcp-pc "')
     assert list(folder.iterdir()) == [], "request and answer files removed"
+
+
+async def test_the_add_in_version_is_checked_once(live):
+    backend, holder, _f = live
+    await backend.pointcloud("info", {})
+    await backend.pointcloud("info", {})
+    assert len(holder.doc.sent) == 3, "one ping, then two calls"
+
+
+async def test_an_outdated_add_in_runs_nothing_and_is_replaced(live, monkeypatch):
+    backend, holder, _f = live
+    holder.doc.ping_version = "0.1.0"
+    seen = []
+    holder.doc.handler = lambda body: seen.append(body["op"]) or {"ok": True}
+    monkeypatch.setattr(config.settings, "pointcloud_addin_autoinstall", True)
+    monkeypatch.setattr(
+        pc, "install_bundle", lambda: {"installed": True, "reason": "staged_restart_autocad"}
+    )
+    with pytest.raises(ToolError, match="^addin_outdated: .*0.1.0.*staged_restart_autocad"):
+        await backend.pointcloud("info", {})
+    assert seen == [], "info never reached the old add-in"
 
 
 async def test_an_add_in_error_is_typed(live):

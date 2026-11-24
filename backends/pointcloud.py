@@ -37,7 +37,7 @@ from typing import Any
 
 ADDIN_NAME = "McpPointCloud"
 #: The add-in version this server speaks to (``Api.Version`` in the C#).
-ADDIN_VERSION = "0.1.0"
+ADDIN_VERSION = "0.1.1"
 BUNDLE_SOURCE = Path(__file__).resolve().parent / "addin" / f"{ADDIN_NAME}.bundle"
 
 TRUSTED_PATH_HINT = (
@@ -96,21 +96,47 @@ def install_bundle(source: Path | None = None, target: Path | None = None) -> di
     if bundle_version(target) == wanted and (target / "Contents" / f"{ADDIN_NAME}.dll").exists():
         report["reason"] = "already_installed"
         return report
-    staging = target.with_name(target.name + f".new-{uuid.uuid4().hex[:6]}")
+    if not target.exists():
+        staging = target.with_name(target.name + f".new-{uuid.uuid4().hex[:6]}")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, staging)
+            os.replace(staging, target)
+        except OSError as exc:
+            shutil.rmtree(staging, ignore_errors=True)
+            report["reason"] = f"copy_failed: {exc}"
+            return report
+        report["installed"] = True
+        report["reason"] = "copied"
+        return report
+    # An older bundle is there, and AutoCAD may have its DLL loaded: a loaded
+    # DLL cannot be overwritten or deleted, but it can be renamed. The old DLL
+    # becomes McpPointCloud.dll.old-<id> (removed at a later install), the new
+    # one takes its name and AutoCAD loads it at its next start.
+    staged = False
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, staging)
-        if target.exists():
-            old = target.with_name(target.name + f".old-{uuid.uuid4().hex[:6]}")
-            os.replace(target, old)  # fails while AutoCAD holds the DLL
-            shutil.rmtree(old, ignore_errors=True)
-        os.replace(staging, target)
+        for leftover in (target / "Contents").glob(f"{ADDIN_NAME}.dll.old-*"):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass  # still loaded; removed next time
+        for src in sorted(p for p in source.rglob("*") if p.is_file()):
+            dst = target / src.relative_to(source)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.suffix.lower() == ".xml":
+                continue  # the version file last, once the DLL is in place
+            try:
+                shutil.copyfile(src, dst)
+            except PermissionError:
+                os.replace(dst, dst.with_name(dst.name + f".old-{uuid.uuid4().hex[:6]}"))
+                shutil.copyfile(src, dst)
+                staged = True
+        shutil.copyfile(source / "PackageContents.xml", target / "PackageContents.xml")
     except OSError as exc:
-        shutil.rmtree(staging, ignore_errors=True)
-        report["reason"] = "in_use" if target.exists() else f"copy_failed: {exc}"
+        report["reason"] = f"copy_failed: {exc}"
         return report
     report["installed"] = True
-    report["reason"] = "copied"
+    report["reason"] = "staged_restart_autocad" if staged else "copied"
     return report
 
 

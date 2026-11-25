@@ -29,7 +29,7 @@ namespace McpPointCloud
 {
     public class Api
     {
-        public const string Version = "0.1.2";
+        public const string Version = "0.1.3";
 
         [LispFunction("mcp-pc")]
         public object Dispatch(ResultBuffer args)
@@ -61,6 +61,7 @@ namespace McpPointCloud
                 else if (op == "crop_clear") res = CropClear(r);
                 else if (op == "style") res = Style(r);
                 else if (op == "section") res = Section(r);
+                else if (op == "dump") res = Dump(r);
                 else res = Fail("unknown_op", "unknown op " + op);
             }
             catch (System.Exception ex)
@@ -200,6 +201,14 @@ namespace McpPointCloud
                 }
                 if (close && pts.Count > 0 && pts[0].DistanceTo(pts[pts.Count - 1]) > 1e-9) pts.Add(pts[0]);
                 Vector3d normal = plane == "front" ? Vector3d.YAxis : plane == "side" ? Vector3d.XAxis : Vector3d.ZAxis;
+                // 0.1.3: a crop drawn by the user in the FRONT view (T11) is stored
+                // Rectangular with [x, 0, z] native vertices; our Polygonal front crop
+                // with the same vertices hid everything. "auto" = rectangular for a
+                // front/side outline of four points, polygonal on top (which works).
+                string cropType = Str(r, "crop_type", "auto");
+                if (cropType == "auto")
+                    cropType = (plane != "top" && poly.Count == 4) ? "rectangular" : "polygonal";
+                diag["crop_type"] = cropType;
                 int before = pc.getCroppingCount();
                 diag["crops_before"] = before;
                 string used;
@@ -207,7 +216,7 @@ namespace McpPointCloud
                 {
                     while (pc.getCroppingCount() > 1) pc.removeLastCropping();
                     PointCloudCrop c = pc.getPointCloudCropping(0);
-                    SetCrop(c, pts, planeMode, normal, inside, inverted, diag);
+                    SetCrop(c, pts, planeMode, normal, inside, inverted, cropType, diag);
                     used = "edit_existing";
                 }
                 else if (method == "edit_existing")
@@ -218,7 +227,7 @@ namespace McpPointCloud
                 {
                     if (replace) pc.clearCropping();
                     PointCloudCrop c = PointCloudCrop.Create(IntPtr.Zero);
-                    SetCrop(c, pts, planeMode, normal, inside, inverted, diag);
+                    SetCrop(c, pts, planeMode, normal, inside, inverted, cropType, diag);
                     pc.addCroppingBoundary(c);
                     used = "new";
                 }
@@ -226,7 +235,33 @@ namespace McpPointCloud
                 if (zmin != null && zmax != null && plane == "top")
                 {
                     double z0 = Convert.ToDouble(zmin), z1 = Convert.ToDouble(zmax);
-                    diag["zband"] = ApplyHeightBand(pc, z0, z1, zspace);
+                    string zmode = Str(r, "zband", "front_crop");
+                    if (zmode == "elevation")
+                    {
+                        diag["zband"] = ApplyHeightBand(pc, z0, z1, zspace);
+                    }
+                    else
+                    {
+                        // The band as a second crop seen from the FRONT, exactly the
+                        // shape of the user's T11 crop: Rectangular, [x, 0, z] native,
+                        // closed, no plane - over the outline's x range.
+                        double xa = double.MaxValue, xb = double.MinValue;
+                        foreach (double[] p in poly) { xa = Math.Min(xa, p[0]); xb = Math.Max(xb, p[0]); }
+                        Matrix3d m = vertexSpace == "wcs" ? CloudTransform(pc).Inverse() : Matrix3d.Identity;
+                        Point3d lo = new Point3d(xa, 0, z0).TransformBy(m), hi = new Point3d(xb, 0, z1).TransformBy(m);
+                        var band = new Point3dCollection();
+                        band.Add(new Point3d(lo.X, 0, lo.Z));
+                        band.Add(new Point3d(hi.X, 0, lo.Z));
+                        band.Add(new Point3d(hi.X, 0, hi.Z));
+                        band.Add(new Point3d(lo.X, 0, hi.Z));
+                        band.Add(new Point3d(lo.X, 0, lo.Z));
+                        var bdiag = new Dictionary<string, object>();
+                        PointCloudCrop bc = PointCloudCrop.Create(IntPtr.Zero);
+                        SetCrop(bc, band, Str(r, "band_plane_mode", "none"), Vector3d.YAxis, true, false, "rectangular", bdiag);
+                        pc.addCroppingBoundary(bc);
+                        bdiag["mode"] = "front_crop";
+                        diag["zband"] = bdiag;
+                    }
                 }
                 pc.ShowCropped = true;
                 diag["crops_after"] = pc.getCroppingCount();
@@ -240,10 +275,14 @@ namespace McpPointCloud
         }
 
         static void SetCrop(PointCloudCrop c, Point3dCollection pts, string planeMode, Vector3d normal,
-                            bool inside, bool inverted, Dictionary<string, object> diag)
+                            bool inside, bool inverted, string cropType, Dictionary<string, object> diag)
         {
-            c.CropType = PointCloudCropType.Polygonal;
-            if (planeMode == "xy") c.CropPlane = new Plane(Point3d.Origin, normal);
+            c.CropType = cropType == "rectangular" ? PointCloudCropType.Rectangular : PointCloudCropType.Polygonal;
+            // plane_mode: none (as AutoCAD's own crops read back), normal (plane through
+            // the origin with the view's axis; "xy" is the 0.1.2 name), reverse (negated).
+            if (planeMode == "normal" || planeMode == "xy") c.CropPlane = new Plane(Point3d.Origin, normal);
+            else if (planeMode == "reverse") c.CropPlane = new Plane(Point3d.Origin, normal.Negate());
+            diag["plane_mode"] = planeMode;
             c.Vertices = pts;
             c.Inside = inside;
             c.Inverted = inverted;
@@ -262,12 +301,24 @@ namespace McpPointCloud
         {
             var b = new Dictionary<string, object>();
             double n0 = z0, n1 = z1;
-            if (space == "wcs")
+            if (space == "wcs" || space == "from_min")
             {
                 double s = pc.Scale == 0 ? 1.0 : pc.Scale;
                 n0 = (z0 - pc.Location.Z) / s;
                 n1 = (z1 - pc.Location.Z) / s;
             }
+            if (space == "from_min")
+            {
+                // elevation measured from the bottom of the cloud (native extents min z)
+                double zlow = 0;
+                try { zlow = pc.NativeExtents.MinPoint.Z; } catch (System.Exception) { }
+                n0 -= zlow;
+                n1 -= zlow;
+            }
+            // what elevation might be relative to: the limit box and every extent
+            b["limit_box"] = Safe(delegate { var t = pc.LimitBoxBound; return (object)new[] { t.Item1, t.Item2 }; });
+            b["geom_extents"] = Safe(delegate { return (object)E(pc.GeomExtents); });
+            b["range_before"] = Safe(delegate { var t = pc.MinMaxElevation; return (object)new[] { t.Item1, t.Item2 }; });
             b["space"] = space;
             b["sent"] = new[] { n0, n1 };
             pc.Stylization = PointCloudStylizationType.HeightRamp;
@@ -277,6 +328,58 @@ namespace McpPointCloud
             b["stored"] = Safe(delegate { var t = pc.MinMaxElevation; return (object)new[] { t.Item1, t.Item2 }; });
             b["native_extents"] = Safe(delegate { return (object)E(pc.NativeExtents); });
             return b;
+        }
+
+        // 0.1.3 diagnostics: the cloud entity as AutoCAD itself writes it to DXF -
+        // the managed PointCloudCrop.CropPlane getter returns garbage for crops the
+        // user drew (T11), so the stored crop data are read from AutoCAD's own DXF
+        // output instead: Wblock of the one entity into a new database, DxfOut to
+        // a temp file, the entity's group codes returned. Read-only for the drawing.
+        static Dictionary<string, object> Dump(Dictionary<string, object> r)
+        {
+            Document doc = AcApp.DocumentManager.MdiActiveDocument;
+            Database db = doc.Database;
+            ObjectId id;
+            string why = Find(db, Str(r, "handle", null), out id);
+            if (why != null) return Fail("not_found", why);
+            string tmp = Path.Combine(Path.GetTempPath(), "mcp-pc-dump-" + Guid.NewGuid().ToString("N") + ".dxf");
+            try
+            {
+                using (doc.LockDocument())
+                {
+                    var ids = new ObjectIdCollection();
+                    ids.Add(id);
+                    using (Database one = db.Wblock(ids, Point3d.Origin))
+                    {
+                        one.DxfOut(tmp, 16, DwgVersion.Current);
+                    }
+                }
+                string[] lines = File.ReadAllLines(tmp);
+                var codes = new List<object>();
+                bool inEntity = false;
+                for (int i = 0; i + 1 < lines.Length; i += 2)
+                {
+                    string code = lines[i].Trim(), value = lines[i + 1].Trim();
+                    if (code == "0")
+                    {
+                        if (inEntity) break;
+                        inEntity = value == "ACDBPOINTCLOUDEX";
+                    }
+                    if (inEntity && codes.Count < 3000) codes.Add(new[] { code, value });
+                }
+                var d = Ok();
+                d["dxf_codes"] = codes;
+                d["count"] = codes.Count;
+                return d;
+            }
+            catch (System.Exception ex)
+            {
+                return Fail("api_error", "dump: " + ex.GetType().Name + ": " + ex.Message);
+            }
+            finally
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch (System.Exception) { }
+            }
         }
 
         static Dictionary<string, object> CropClear(Dictionary<string, object> r)

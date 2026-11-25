@@ -373,3 +373,25 @@ async def test_the_add_in_source_matches_the_live_findings():
     assert "ElevationApplyToFixedRange = true" in source
     assert 'Bool(r, "draw", false)' in source
     assert "PointCloudExtractor.AppendPolylineProfile(" not in source
+
+
+async def test_013_front_band_and_dump(recorder):
+    square = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    await server.pointcloud_crop(
+        square,
+        zmin=900,
+        zmax=1100,
+        options={"crop_type": "rectangular", "zband": "front_crop", "band_plane_mode": "reverse"},
+        ctx=_Ctx(),
+    )
+    payload = recorder[-1][1]
+    assert payload["zband"] == "front_crop" and payload["crop_type"] == "rectangular"
+    await server.pointcloud_info(cloud="1230", dxf=True, ctx=_Ctx())
+    assert recorder[-1] == ("dump", {"handle": "1230"})
+
+
+async def test_013_source_builds_the_band_like_the_users_front_crop():
+    source = (ROOT / "addin" / "McpPointCloud" / "McpPointCloud.cs").read_text(encoding="utf-8")
+    assert 'Str(r, "zband", "front_crop")' in source
+    assert "PointCloudCropType.Rectangular" in source
+    assert "db.Wblock(ids, Point3d.Origin)" in source and 'value == "ACDBPOINTCLOUDEX"' in source

@@ -13161,7 +13161,7 @@ async def pointcloud_crop(
     options: Annotated[dict | None, "Test knobs"] = None,
     ctx: Context = None,
 ) -> dict:
-    """Crop to a WCS outline; zmin/zmax cut a height band. Live only."""
+    """Crop to a WCS outline. Live only."""
     if plane not in ("top", "front", "side"):
         raise InvalidArgsError("invalid_args: plane is top, front or side")
     if vertex_space not in ("wcs", "native", "raw_wcs"):

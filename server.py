@@ -13133,8 +13133,8 @@ async def pointcloud_attach(
 )
 async def pointcloud_info(
     cloud: Annotated[str, "Point cloud handle (hex); empty = all"] = "",
-    items: Annotated[bool, "Add crops, counts, scans"] = False,
-    dxf: Annotated[bool, "Raw DXF codes of one cloud"] = False,
+    items: Annotated[bool, "Details"] = False,
+    dxf: Annotated[bool, "DXF dump"] = False,
     ctx: Context = None,
 ) -> dict:
     """Attached point clouds: path, file_found, transform, crop_count. Live only."""
@@ -13158,7 +13158,7 @@ async def pointcloud_crop(
     inside: Annotated[bool, "Keep inside the outline"] = True,
     replace: Annotated[bool, "Remove earlier crops"] = True,
     vertex_space: Annotated[str, "wcs, native or raw_wcs"] = "wcs",
-    options: Annotated[dict | None, "plane_mode, method, close, zband_space"] = None,
+    options: Annotated[dict | None, "Test knobs"] = None,
     ctx: Context = None,
 ) -> dict:
     """Crop to a WCS outline. Live only."""

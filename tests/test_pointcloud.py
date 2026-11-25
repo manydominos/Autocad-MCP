@@ -395,3 +395,16 @@ async def test_013_source_builds_the_band_like_the_users_front_crop():
     assert 'Str(r, "zband", "front_crop")' in source
     assert "PointCloudCropType.Rectangular" in source
     assert "db.Wblock(ids, Point3d.Origin)" in source and 'value == "ACDBPOINTCLOUDEX"' in source
+
+
+async def test_vertical_crops_default_to_a_plane_on_the_view_axis(recorder):
+    """Live 2026-11-25: the height band showed points only with band_plane_mode
+    normal (T3g/T3h); none left it almost empty (T3f). Top crops keep no plane."""
+    square = [[0, 0], [10, 0], [10, 10], [0, 10]]
+    await server.pointcloud_crop(square, zmin=900, zmax=1100, ctx=_Ctx())
+    payload = recorder[-1][1]
+    assert payload["band_plane_mode"] == "normal" and "plane_mode" not in payload
+    await server.pointcloud_crop(square, plane="front", ctx=_Ctx())
+    assert recorder[-1][1]["plane_mode"] == "normal"
+    await server.pointcloud_crop(square, options={"band_plane_mode": "none"}, ctx=_Ctx())
+    assert recorder[-1][1]["band_plane_mode"] == "none", "a test knob still overrides"

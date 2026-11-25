@@ -13161,7 +13161,7 @@ async def pointcloud_crop(
     options: Annotated[dict | None, "Test knobs"] = None,
     ctx: Context = None,
 ) -> dict:
-    """Crop to a WCS outline. Live only."""
+    """Crop to a WCS outline; zmin/zmax cut a height band. Live only."""
     if plane not in ("top", "front", "side"):
         raise InvalidArgsError("invalid_args: plane is top, front or side")
     if vertex_space not in ("wcs", "native", "raw_wcs"):
@@ -13194,6 +13194,12 @@ async def pointcloud_crop(
         "inside": bool(inside),
         "replace": bool(replace),
         "vertex_space": vertex_space,
+        # Live 2026-11-25 (T3g/T3h, T12): a vertical crop - the height band, a
+        # front/side outline - keeps points only with a crop plane on its view
+        # axis ("none" left it almost empty). A top crop works without one.
+        # Set here, so the 0.1.3 add-in needs no rebuild.
+        "band_plane_mode": "normal",
+        **({"plane_mode": "normal"} if plane != "top" else {}),
         **knobs,
     }
     return await _backend(ctx).pointcloud("crop", payload)

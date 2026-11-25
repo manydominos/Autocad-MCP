@@ -10618,75 +10618,100 @@ class ComBackend(ComCheckpoints, AutoCADBackend):
                 f"got {visual_style!r}"
             )
         style_report: dict[str, Any] = {}
+        state: dict[str, Any] = {"saved": {}, "target": None, "previous": None}
 
-        def _sync():
+        # Three short COM jobs with the wait between them OUTSIDE the COM
+        # thread (retest 2026-11-25: settle_s 20 inside one job overran
+        # COM_CALL_TIMEOUT 15 s and the call was abandoned).
+        def _prepare():
             app = _acad_app()
             doc = _acad_doc()
             if wanted is not None:
                 app.ZoomWindow(_apoint(wanted[0], wanted[1]), _apoint(wanted[2], wanted[3]))
-            # AutoCAD does not draw point clouds in 2D Wireframe ("Point clouds
-            # are not displayed in 2D Wireframe", live 2026-11-24): `auto`
-            # switches such a view to Hidden for the shot and back after.
-            previous_style = None
+            # AutoCAD does not draw point clouds in 2D Wireframe. VSCURRENT is a
+            # command, not a readable variable on AutoCAD 2021 (retest
+            # 2026-11-25: the read failed and nothing switched), so an unknown
+            # style is taken as the default 2D Wireframe, said so in the report.
+            previous = None
             try:
-                previous_style = str(doc.GetVariable("VSCURRENT"))
+                previous = str(doc.GetVariable("VSCURRENT"))
             except Exception:
                 log.debug("VSCURRENT unreadable", exc_info=True)
+            has_cloud = _has_point_cloud(doc) if style_choice == "auto" else None
+            style_report.update(previous=previous, point_cloud_found=has_cloud)
+            current = (previous or "2dwireframe").lower().replace(" ", "")
+            if previous is None:
+                style_report["previous_assumed"] = "2D Wireframe"
             target = None
-            if previous_style is not None and style_choice != "keep":
-                current = previous_style.lower().replace(" ", "")
-                if style_choice == "auto":
-                    if current == "2dwireframe" and _has_point_cloud(doc):
-                        target = "hidden"
-                elif style_choice != current:
-                    target = style_choice
-            style_report.update(previous=previous_style, used=previous_style, restored=None)
+            if style_choice == "auto":
+                if current == "2dwireframe" and has_cloud:
+                    target = "hidden"
+            elif style_choice != "keep" and style_choice != current:
+                target = style_choice
+            state.update(target=target, previous=current)
+            style_report["used"] = previous
             if target is not None:
                 self._safe_send_command(doc, f"_.VSCURRENT {_VISUAL_STYLE_KEYWORDS[target]}")
-                style_report["used"] = str(doc.GetVariable("VSCURRENT"))
-            saved: dict[str, Any] = {}
+                try:
+                    style_report["used"] = str(doc.GetVariable("VSCURRENT"))
+                except Exception:
+                    style_report["used"] = target
             if hide_ui:
                 for name in _CAPTURE_HIDDEN_UI:
                     try:
-                        saved[name] = doc.GetVariable(name)
+                        state["saved"][name] = doc.GetVariable(name)
                         _set_variable(doc, name, 0)
                     except Exception:
-                        saved.pop(name, None)
+                        state["saved"].pop(name, None)
             try:
-                try:
-                    app.Update()
-                except Exception:
-                    log.debug("Application.Update failed before capture", exc_info=True)
-                if settle:
-                    time.sleep(settle)
-                frame = _view_frame(doc)
-                main = _find_autocad_hwnd()
-                view_hwnd = _find_view_hwnd(main, frame["screen_px"]) if main else None
-                png = _capture_window(view_hwnd) if view_hwnd else None
-            finally:
-                for name, value in saved.items():
-                    try:
-                        _set_variable(doc, name, value)
-                    except Exception:
-                        log.debug("could not restore %s", name, exc_info=True)
-                if target is not None:
-                    back = _VISUAL_STYLE_KEYWORDS.get(previous_style.lower().replace(" ", ""))
-                    if back is None:
-                        style_report["restored"] = False
-                        style_report["note"] = (
-                            f"the previous visual style {previous_style!r} has no command "
-                            "keyword here; restore it in AutoCAD (VSCURRENT)"
-                        )
-                    else:
-                        try:
-                            self._safe_send_command(doc, f"_.VSCURRENT {back}")
-                            style_report["restored"] = True
-                        except Exception as exc:
-                            style_report["restored"] = False
-                            style_report["note"] = f"restoring {previous_style!r} failed: {exc}"
+                app.Update()
+            except Exception:
+                log.debug("Application.Update failed before capture", exc_info=True)
+
+        def _shoot():
+            doc = _acad_doc()
+            frame = _view_frame(doc)
+            main = _find_autocad_hwnd()
+            view_hwnd = _find_view_hwnd(main, frame["screen_px"]) if main else None
+            png = _capture_window(view_hwnd) if view_hwnd else None
             return png, frame, view_hwnd
 
-        png, frame, view_hwnd = await self._run(_sync)
+        def _restore():
+            doc = _acad_doc()
+            for name, value in state["saved"].items():
+                try:
+                    _set_variable(doc, name, value)
+                except Exception:
+                    log.debug("could not restore %s", name, exc_info=True)
+            if state["target"] is None:
+                return
+            back = _VISUAL_STYLE_KEYWORDS.get(state["previous"])
+            if back is None:
+                style_report["restored"] = False
+                style_report["note"] = (
+                    f"the previous visual style {state['previous']!r} has no command "
+                    "keyword here; restore it in AutoCAD (VSCURRENT)"
+                )
+                return
+            try:
+                self._safe_send_command(doc, f"_.VSCURRENT {back}")
+                style_report["restored"] = True
+            except Exception as exc:
+                style_report["restored"] = False
+                style_report["note"] = f"restoring {state['previous']!r} failed: {exc}"
+
+        style_report["restored"] = None
+        try:
+            await self._run(_prepare)
+            if settle:
+                await asyncio.sleep(settle)
+            png, frame, view_hwnd = await self._run(_shoot)
+        finally:
+            try:
+                await self._run(_restore)
+            except Exception as exc:  # the shot's own error stands
+                style_report["restored"] = False
+                style_report["note"] = f"restore failed: {exc}"
         if png is None:
             return {
                 "png": None,

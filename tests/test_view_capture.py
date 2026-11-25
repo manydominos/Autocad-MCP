@@ -167,7 +167,12 @@ async def test_a_cloud_in_2d_wireframe_is_shot_in_hidden_and_restored(styled, mo
     monkeypatch.setattr(cb, "_has_point_cloud", lambda d: True)
     report = await backend.view_capture(settle_s=0)
     assert sent == ["_.VSCURRENT _Hidden", "_.VSCURRENT _2dwireframe"]
-    assert report["visual_style"] == {"previous": "2dWireframe", "used": "Hidden", "restored": True}
+    assert report["visual_style"] == {
+        "previous": "2dWireframe",
+        "point_cloud_found": True,
+        "used": "Hidden",
+        "restored": True,
+    }
     assert doc.vars["VSCURRENT"] == "2dWireframe"
 
 
@@ -196,3 +201,42 @@ async def test_headless_refuses_by_capability(tmp_path):
     with pytest.raises(UnsupportedCapabilityError) as info:
         await EzdxfBackend().view_capture()
     assert info.value.capability == "view_capture"
+
+
+async def test_unreadable_vscurrent_is_taken_as_2d_wireframe(styled, monkeypatch):
+    """Retest 2026-11-25: VSCURRENT is not readable on AutoCAD 2021, so nothing switched."""
+    import backends.com_backend as cb
+
+    backend, doc, sent = styled
+    del doc.vars["VSCURRENT"]
+
+    def _send(d, cmd, *a, **k):
+        sent.append(cmd)
+
+    monkeypatch.setattr(cb.ComBackend, "_safe_send_command", staticmethod(_send))
+    monkeypatch.setattr(cb, "_has_point_cloud", lambda d: True)
+    report = await backend.view_capture(settle_s=0)
+    assert sent == ["_.VSCURRENT _Hidden", "_.VSCURRENT _2dwireframe"]
+    style = report["visual_style"]
+    assert style["previous"] is None and style["previous_assumed"] == "2D Wireframe"
+    assert style["used"] == "hidden" and style["restored"] is True
+
+
+async def test_the_settle_wait_is_outside_the_com_jobs(live, monkeypatch):
+    """Retest 2026-11-25: settle_s 20 inside one COM job overran COM_CALL_TIMEOUT."""
+    import backends.com_backend as cb
+
+    backend, _doc, _z = live
+    jobs, waits = [], []
+
+    async def _run_counting(func, *args, **kwargs):
+        jobs.append(func.__name__)
+        return func(*args, **kwargs)
+
+    async def _sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(backend, "_run", _run_counting)
+    monkeypatch.setattr(cb.asyncio, "sleep", _sleep)
+    await backend.view_capture(settle_s=20)
+    assert jobs == ["_prepare", "_shoot", "_restore"] and waits == [20.0]

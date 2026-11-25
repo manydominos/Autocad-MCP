@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fork (manydominos) – v1.8.0-lokalno.2 – 2026-11-25
+Added
+- Point clouds (RCS/RCP, live AutoCAD 2021-2024 via the McpPointCloud .NET add-in 0.1.3,
+  installed by the server as an autoloader bundle; the operator trusts its Contents folder once):
+  pointcloud_attach, pointcloud_info (items, dxf), pointcloud_crop (WCS outline stored in the
+  cloud's native frame; zmin/zmax = height band as a front crop with plane mode "normal"),
+  pointcloud_crop_clear, pointcloud_style, pointcloud_section (experimental, diagnostics only unless draw=true).
+- view_capture: the AutoCAD view as drawn (point clouds too) with px_per_unit and world_window,
+  PNG + JSON to a path; 2D Wireframe switched to Hidden for a cloud and back.
+Fixed
+- drawing_save_as writes DWG R2018 by default (was R2000, which drops point clouds); `version`.
+- drawing_save / document_close on a network share no longer rename the open DWG (no lost DWG).
+- drawing_audit waits for AUDIT and returns error/fix/erased counts from the .adt log.
+- system_run_command refuses an unknown command before sending it; a command left at a prompt
+  gets ESC x3 via Win32 and ends as command_incomplete (no manual ESC).
+- A backslash UNC path inside an explicit UNC root of ALLOWED_PATHS is accepted.
+- After AutoCAD is restarted the next call attaches again (RPC server unavailable).
+Known
+- Two environment-bound tests fail as on the previous main: test_benchmark_v8, test_entity_properties.
+
 ## [1.8.0] - 2026-11-06
 
 1.8.0: the server remembers, finishes a job in one call and measures itself

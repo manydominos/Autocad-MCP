@@ -13134,10 +13134,13 @@ async def pointcloud_attach(
 async def pointcloud_info(
     cloud: Annotated[str, "Point cloud handle (hex); empty = all"] = "",
     items: Annotated[bool, "Add crops, counts, scans"] = False,
+    dxf: Annotated[bool, "Raw DXF codes of one cloud"] = False,
     ctx: Context = None,
 ) -> dict:
     """Attached point clouds: path, file_found, transform, crop_count. Live only."""
     payload = {"handle": _pc_handle(cloud), "items": bool(items)}
+    if dxf:
+        return await _backend(ctx).pointcloud("dump", {"handle": payload["handle"]})
     return await _backend(ctx).pointcloud("info", payload)
 
 
@@ -13165,10 +13168,13 @@ async def pointcloud_crop(
         raise InvalidArgsError("invalid_args: vertex_space is wcs, native or raw_wcs")
     knobs = dict(options or {})
     allowed_knobs = {
-        "plane_mode": ("none", "xy"),
+        "plane_mode": ("none", "normal", "reverse", "xy"),
+        "band_plane_mode": ("none", "normal", "reverse"),
         "method": ("auto", "new", "edit_existing"),
         "close": (True, False),
-        "zband_space": ("wcs", "native"),
+        "crop_type": ("auto", "polygonal", "rectangular"),
+        "zband": ("front_crop", "elevation"),
+        "zband_space": ("wcs", "native", "from_min"),
     }
     for key, value in knobs.items():
         if key not in allowed_knobs or value not in allowed_knobs[key]:
